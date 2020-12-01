@@ -1,100 +1,164 @@
 #include <TimerOne.h>
 
-#define FAN1_INPUT 2
-#define FAN2_INPUT 3
-#define MODE1_INPUT 4
-#define MODE2_INPUT 5
-#define FAN2_DISSABLED_INPUT 6
-#define FANS_OUTPUT 9
-#define FAN_PERIOD 40
-#define MIN_DUTY 50
-#define MAX_DUTY 1023
+const byte FAN_INPUT1 = 2;
+const byte FAN_INPUT2 = 3;
+const byte INPUT_MODE1 = 4;
+const byte INPUT_MODE2 = 5;
+const byte OUTPUT_MODE1 = 6;
+const byte OUTPUT_MODE2 = 7;
+const byte FAN_INPUT2_DISSABLED = 8;
+const byte FANS_OUTPUT1 = 9;
+const byte FANS_OUTPUT2 = 10;
+const byte FAN_PERIOD = 40;
+const byte MIN_DUTY = 50;
+const word MAX_DUTY = 1023;
 
-struct FanInfo {
-  byte uptime;
-  byte input_pin;
+// параметры входного сигнала
+struct FanInputInfo {
+  byte pulse_time;  // период отсутствия импульса
+  byte pin;
+  bool is_odd_tack;  // такт, на котором получен сигнал
+};
+// параметры выходного сигнала
+struct FansOutputInfo {
+  byte pin;
+  word duty;  // коэффициент заполнения PWM
+};
+// сгруппированные параметры выходного и входного сигнала
+struct FanGroupInfo {
+  FanInputInfo* input;
+  FansOutputInfo* output;
+};
+// тип выходного сигнала
+enum InputMode {
+  PWM_MODE,   // управление по входному сигналу PWM
+  MAX_SPEED,  // максимальная скорость
+  MIN_SPEED,  // минимальная скорость
+};
+// вариант выбора выходного сигнала
+enum OutputMode {
+  MAX_ONLY,    // выбирать максимальный сигнал из двух входящих
+  DIFFERENCE,  // максимальный сигнал на соответствующую ему группу, минимальный сигнал усредняется и отправляется на соответствующую группу
+  DIRECT,      // каждый сигнал на соответствующий выход
 };
 
-enum Mode {
-  NORMAL_MODE,
-  MAX_MODE,
-  MIN_MODE,
-};
+// инициализация структур хранения сигналов
+FanInputInfo info_input1 = FanInputInfo{0, FAN_INPUT1, false};
+FanInputInfo info_input2 = FanInputInfo{0, FAN_INPUT2, false};
+FansOutputInfo info_output1 = FansOutputInfo{FANS_OUTPUT1, MIN_DUTY};
+FansOutputInfo info_output2 = FansOutputInfo{FANS_OUTPUT2, MIN_DUTY};
+FanGroupInfo group1 = FanGroupInfo{&info_input1, &info_output1};
+FanGroupInfo group2 = FanGroupInfo{&info_input2, &info_output2};
 
-int current_duty = MIN_DUTY;
-boolean is_enabled_fan2;
-FanInfo fan1_info = FanInfo {0, FAN1_INPUT};
-FanInfo fan2_info = FanInfo {0, FAN2_INPUT};
- 
+FanGroupInfo output_groups[] = {group1, group2};  // все группы параметров сигналов
+
+OutputMode output_mode = OutputMode::DIFFERENCE;  // первичная настройка выходного сигнала
+
+bool is_odd_tack = true;      // текущий такт (всего два, четный и нечетный)
+bool only_one_input = false;  // количество входных сигналов (первичное значение - 2)
+
 void setup() {
-  pinMode(MODE1_INPUT, INPUT_PULLUP);
-  pinMode(MODE2_INPUT, INPUT_PULLUP);
-  pinMode(FAN2_DISSABLED_INPUT, INPUT_PULLUP);
-  pinMode(fan1_info.input_pin, INPUT);
-  pinMode(fan2_info.input_pin, INPUT);
-  Timer1.initialize(FAN_PERIOD); // частота ШИМ ~25 кГц
-  
-  is_enabled_fan2 = (digitalRead(FAN2_DISSABLED_INPUT) == 0);
-}
- 
-void loop() {
-  int mode1 = digitalRead(MODE1_INPUT);
-  int mode2 = digitalRead(MODE2_INPUT);
-  Mode current_mode;
-  if (mode1 == 0) {
-    current_mode = MAX_MODE;
-  } else if (mode2 == 0) {
-    current_mode = MIN_MODE;
+  Timer1.initialize(FAN_PERIOD);  // частота ШИМ ~25 кГц
+
+  // инициализация пинов настройки
+  pinMode(INPUT_MODE1, INPUT_PULLUP);
+  pinMode(INPUT_MODE2, INPUT_PULLUP);
+  pinMode(OUTPUT_MODE1, INPUT_PULLUP);
+  pinMode(OUTPUT_MODE2, INPUT_PULLUP);
+  pinMode(FAN_INPUT2_DISSABLED, INPUT_PULLUP);
+
+  // инициализация входящих ШИМ пинов
+  pinMode(info_input1.pin, INPUT);
+  only_one_input = (digitalRead(FAN_INPUT2_DISSABLED) == 0);
+  if (only_one_input) {
+    pinMode(info_input2.pin, INPUT);  // используется два входных пина
   } else {
-    current_mode = NORMAL_MODE;
+    group2.input = &info_input1;  // используется один входной пин
   }
-  
-  if (current_mode == NORMAL_MODE) {
-    fan1_info = updateFanInfo(fan1_info);
-    if (is_enabled_fan2) {
-     fan2_info = updateFanInfo(fan2_info); 
-    }
-    applyFanCtrlByMaxInput();
-  } else if (current_mode == MAX_MODE) {
-    if (current_duty != MAX_DUTY) {
-      setDuty(MAX_DUTY);
-    }
-  } else if (current_mode == MIN_MODE) {
-    if (current_duty != MIN_DUTY) {
-      setDuty(MIN_DUTY);
+
+  // инициализация режима выходного сигнала
+  if (digitalRead(OUTPUT_MODE1) == 0) {
+    output_mode = OutputMode::MAX_ONLY;
+  } else {
+    if (digitalRead(OUTPUT_MODE2) == 0) {
+      output_mode = OutputMode::DIRECT;
+    } else {
+      output_mode = OutputMode::DIFFERENCE;
     }
   }
 }
 
-FanInfo updateFanInfo(FanInfo fan_info) {
-  int value = pulseIn(fan_info.input_pin, HIGH, FAN_PERIOD * 2);
-  if (value == 0) {
-    value = (digitalRead(fan_info.input_pin) == 0) ? 0 : FAN_PERIOD;
-  } else if (value > FAN_PERIOD) {
-    value = FAN_PERIOD;
-  }
-
-  if (value != fan_info.uptime) {
-    fan_info.uptime = value;
-  }
-
-  return fan_info;
-}
-
-void applyFanCtrlByMaxInput() {
-  int max_uptime = (is_enabled_fan2 || (fan1_info.uptime > fan2_info.uptime)) ? fan1_info.uptime : fan2_info.uptime;
-  
-  int pwm_duty = map(max_uptime, 0, FAN_PERIOD, 0, MAX_DUTY);
-  if (pwm_duty < MIN_DUTY) {
-    if (current_duty != MIN_DUTY) {
-      setDuty(MIN_DUTY);
+// получить тип выходного сигнала
+InputMode readInputMode() {
+  if (digitalRead(INPUT_MODE1) == 0) {
+    return InputMode::MAX_SPEED;
+  } else {
+    if (digitalRead(INPUT_MODE2) == 0) {
+      return InputMode::MIN_SPEED;
+    } else {
+      return InputMode::PWM_MODE;
     }
-  } else if (current_duty != pwm_duty) {
-    setDuty(pwm_duty);
   }
 }
 
-void setDuty(int pwm_duty) {
-  current_duty = pwm_duty;
-  Timer1.pwm(FANS_OUTPUT, pwm_duty);
+// обновить информацию о входном сигнале в текущем такте
+void updateInputInfo() {
+  InputMode input_mode = readInputMode();
+  is_odd_tack = !is_odd_tack;
+
+  if (input_mode == InputMode::PWM_MODE) {
+    for (int i = 0; i < 2; i++) {
+      FanInputInfo* input_info = output_groups[i].input;
+      if (is_odd_tack != input_info->is_odd_tack) {
+        int value = pulseIn(input_info->pin, HIGH, FAN_PERIOD * 2);
+        if (value == 0) {
+          value = (digitalRead(input_info->pin) == 0) ? 0 : FAN_PERIOD;
+        } else if (value > FAN_PERIOD) {
+          value = FAN_PERIOD;
+        }
+
+        if (value != input_info->pulse_time) {
+          input_info->pulse_time = value;
+        }
+        input_info->is_odd_tack = is_odd_tack;
+      }
+    }
+
+    if (!only_one_input) {
+      if (output_mode == OutputMode::MAX_ONLY) {
+        if (group1.input->pulse_time > group2.input->pulse_time) {
+          group2.input->pulse_time = group1.input->pulse_time;
+        } else {
+          group1.input->pulse_time = group2.input->pulse_time;
+        }
+      } else if (output_mode == OutputMode::DIFFERENCE) {
+        if (group1.input->pulse_time > group2.input->pulse_time) {
+          group2.input->pulse_time = (group2.input->pulse_time + group1.input->pulse_time) / 2;
+        } else {
+          group1.input->pulse_time = (group2.input->pulse_time + group1.input->pulse_time) / 2;
+        }
+      }
+    }
+  } else {
+    int value = (input_mode == InputMode::MAX_SPEED) ? FAN_PERIOD : 0;
+    for (int i = 0; i < 2; i++) {
+      FanInputInfo* input_info = output_groups[i].input;
+      if (is_odd_tack != input_info->is_odd_tack) {
+        if (value != input_info->pulse_time) {
+          input_info->pulse_time = value;
+        }
+        input_info->is_odd_tack = is_odd_tack;
+      }
+    }
+  }
+}
+
+void applyDuty(FanGroupInfo group) {
+  Timer1.pwm(group.output->pin, group.output->duty);
+}
+
+void loop() {
+  updateInputInfo();
+  applyDuty(group1);
+  applyDuty(group2);
 }

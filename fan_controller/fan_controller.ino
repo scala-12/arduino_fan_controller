@@ -4,6 +4,8 @@ const byte MIN_DUTY = 200;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
+const bool IS_DEBUG = false;
+
 class InputSignalInfo {
  private:
   byte _pin;
@@ -19,17 +21,22 @@ class InputSignalInfo {
     this->_last_duty = MIN_DUTY;
   };
 
-  /** последнее значение импульса */
-  byte get_last_pulse() {
-    return this->_last_pulse;
-  };
-
   /** вычисление заполнения; если значение импульса не изменялось, то показывается последнее сохраненное */
   word calculate_duty() {
     if (!this->_is_actual_duty) {
       this->_is_actual_duty = true;
       this->_last_duty = max(map(this->_last_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
     }
+
+    if (IS_DEBUG) {
+      Serial.print("calculate duty ");
+      Serial.print(this->_pin);
+      Serial.print(":\t");
+      Serial.print(this->_last_pulse);
+      Serial.print(" -> ");
+      Serial.println(this->_last_duty);
+    }
+
     return this->_last_duty;
   };
 
@@ -47,6 +54,13 @@ class InputSignalInfo {
       this->_last_pulse = value;
     }
 
+    if (IS_DEBUG) {
+      Serial.print("in ");
+      Serial.print(this->_pin);
+      Serial.print(":\t");
+      Serial.println(this->_last_pulse);
+    }
+
     return this->_last_pulse;
   };
 };
@@ -61,6 +75,12 @@ class OutputSignalController {
   };
 
   void apply_pwm(word duty) {
+    if (IS_DEBUG) {
+      Serial.print("out ");
+      Serial.print(this->_pin);
+      Serial.print(":\t");
+      Serial.println(duty);
+    }
     Timer1.pwm(this->_pin, duty);
   };
 };
@@ -77,8 +97,9 @@ enum MutationMode {  // вариант вычисления выходных PWM
   IMMUTABLE_VALUE,   // прямоток PWM
 };
 
-bool is_odd_tact;    // такт измерений
-bool is_check_tact;  // такт проверки режимов
+bool is_odd_tact;       // такт измерений
+bool is_check_tact;     // такт проверки режимов
+bool use_only_input_1;  // использовать только первый входной сигнал PWM
 
 SpeedMode speed_mode;        // режим скорости
 MutationMode mutation_mode;  // режим вычисления выходных PWM
@@ -96,11 +117,11 @@ const byte PWM_IN_PIN_2_DISSABLED_PIN = 8;  // использовать толь
 const byte PWM_OUT_PIN_1 = 9;   // пин PWM сигнала для первой группы
 const byte PWM_OUT_PIN_2 = 10;  // пин PWM сигнала для второй группы
 
-InputSignalInfo input_info1(PWM_IN_PIN_1);  // информация о первом входном сигнале
-InputSignalInfo input_info2(PWM_IN_PIN_2);  // информация о втором входном сигнале
+InputSignalInfo* input_info1 = new InputSignalInfo(PWM_IN_PIN_1);  // информация о первом входном сигнале
+InputSignalInfo* input_info2;                                      // информация о втором входном сигнале
 
-OutputSignalController output_controller1(PWM_OUT_PIN_1);  // управление первым выходным сигналом
-OutputSignalController output_controller2(PWM_OUT_PIN_2);  // управление вторым выходным сигналом
+OutputSignalController* output_controller1 = new OutputSignalController(PWM_OUT_PIN_1);  // управление первым выходным сигналом
+OutputSignalController* output_controller2 = new OutputSignalController(PWM_OUT_PIN_2);  // управление вторым выходным сигналом
 
 SpeedMode read_speed_mode() {
   if (digitalRead(SPEED_MODE_PIN_1) == 0) {
@@ -123,12 +144,16 @@ MutationMode read_mutation_mode() {
 }
 
 byte read_pwm() {
-  InputSignalInfo input_info = (is_odd_tact) ? input_info1 : input_info2;
-  return input_info.read_pulse();
+  InputSignalInfo* input_info = (is_odd_tact) ? input_info1 : input_info2;
+  return input_info->read_pulse();
 }
 
 void setup() {
   Timer1.initialize(FAN_PERIOD);  // частота ШИМ ~25 кГц
+
+  if (IS_DEBUG) {
+    Serial.begin(9600);
+  }
 
   pinMode(PWM_IN_PIN_1, INPUT);
   pinMode(PWM_IN_PIN_2, INPUT);
@@ -144,13 +169,15 @@ void setup() {
   is_check_tact = true;
   speed_mode = read_speed_mode();
   mutation_mode = read_mutation_mode();
+  use_only_input_1 = digitalRead(PWM_IN_PIN_2_DISSABLED_PIN) == 0;
 
-  if (digitalRead(PWM_IN_PIN_2_DISSABLED_PIN) == 0) {
-    input_info2 = input_info1;
+  if (!use_only_input_1) {
+    input_info2 = new InputSignalInfo(PWM_IN_PIN_2);
+    input_info2->read_pulse();
   } else {
-    input_info2.read_pulse();
+    input_info2 = input_info1;
   }
-  input_info1.read_pulse();
+  input_info1->read_pulse();
 }
 
 void loop() {
@@ -167,23 +194,28 @@ void loop() {
   word duty_value2;
   if (speed_mode == SpeedMode::INPUT_IMPULSE) {
     read_pwm();
-    duty_value1 = input_info1.calculate_duty();
-    duty_value2 = input_info2.calculate_duty();
-    if (mutation_mode == MutationMode::MAX_ONLY) {
-      byte max_duty = max(duty_value1, duty_value2);
-      duty_value1 = duty_value2 = max_duty;
-    } else if (mutation_mode == MutationMode::MAX_AND_AVERAGED) {
-      byte avaraged_value = (duty_value1 + duty_value2) / 2;
-      if (duty_value1 > duty_value2) {
-        duty_value2 = avaraged_value;
-      } else {
-        duty_value1 = avaraged_value;
+    duty_value1 = input_info1->calculate_duty();
+    if (!use_only_input_1) {
+      duty_value2 = input_info2->calculate_duty();
+      if (mutation_mode == MutationMode::MAX_ONLY) {
+        byte max_duty = max(duty_value1, duty_value2);
+        duty_value1 = duty_value2 = max_duty;
+      } else if (mutation_mode == MutationMode::MAX_AND_AVERAGED) {
+        byte avaraged_value = (duty_value1 + duty_value2) / 2;
+        if (duty_value1 > duty_value2) {
+          duty_value2 = avaraged_value;
+        } else {
+          duty_value1 = avaraged_value;
+        }
       }
+    } else {
+      duty_value2 = duty_value1;
     }
   } else {
     duty_value1 = (speed_mode == SpeedMode::MAX_ALWAYS) ? MAX_DUTY : MIN_DUTY;
     duty_value2 = duty_value1;
   }
-  output_controller1.apply_pwm(duty_value1);
-  output_controller2.apply_pwm(duty_value2);
+
+  output_controller1->apply_pwm(duty_value1);
+  output_controller2->apply_pwm(duty_value2);
 }

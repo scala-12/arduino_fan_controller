@@ -4,40 +4,37 @@ const byte MIN_DUTY = 200;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
+const float SMOOTHING_FACTOR = 0.2;  // коэффициент усреднения
+
 const bool IS_DEBUG = false;
 
 class InputSignalInfo {
  private:
   byte _pin;
+  float _avg_pulse;
   byte _last_pulse;
-  bool _is_actual_duty;
-  word _last_duty;
 
  public:
   InputSignalInfo(byte pin) {
     this->_pin = pin;
-    this->_last_pulse = 0;
-    this->_is_actual_duty = false;
-    this->_last_duty = MIN_DUTY;
+    this->_avg_pulse = FAN_PERIOD;
+    this->_last_pulse = FAN_PERIOD;
   };
 
   /** вычисление заполнения; если значение импульса не изменялось, то показывается последнее сохраненное */
   word calculate_duty() {
-    if (!this->_is_actual_duty) {
-      this->_is_actual_duty = true;
-      this->_last_duty = max(map(this->_last_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
-    }
+    word value = max(map(this->_avg_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
 
     if (IS_DEBUG) {
       Serial.print("calculate duty ");
       Serial.print(this->_pin);
       Serial.print(":\t");
-      Serial.print(this->_last_pulse);
+      Serial.print(this->_avg_pulse);
       Serial.print(" -> ");
-      Serial.println(this->_last_duty);
+      Serial.println(value);
     }
 
-    return this->_last_duty;
+    return value;
   };
 
   /** чтение текущего PWM */
@@ -48,20 +45,18 @@ class InputSignalInfo {
     } else if (value > FAN_PERIOD) {
       value = FAN_PERIOD;
     }
+    this->_last_pulse = value;
 
-    if (this->_last_pulse != value) {
-      this->_is_actual_duty = false;
-      this->_last_pulse = value;
-    }
-
+    this->_avg_pulse = ((1 - SMOOTHING_FACTOR) * this->_avg_pulse) + (SMOOTHING_FACTOR * value);
     if (IS_DEBUG) {
       Serial.print("in ");
       Serial.print(this->_pin);
-      Serial.print(":\t");
-      Serial.println(this->_last_pulse);
+      Serial.print(": ");
+      Serial.print(value);
+      Serial.print(" (");
+      Serial.print(this->_avg_pulse);
+      Serial.println(")");
     }
-
-    return this->_last_pulse;
   };
 };
 
@@ -212,8 +207,7 @@ void loop() {
       duty_value2 = duty_value1;
     }
   } else {
-    duty_value1 = (speed_mode == SpeedMode::MAX_ALWAYS) ? MAX_DUTY : MIN_DUTY;
-    duty_value2 = duty_value1;
+    duty_value1 = duty_value2 = (speed_mode == SpeedMode::MAX_ALWAYS) ? MAX_DUTY : MIN_DUTY;
   }
 
   output_controller1->apply_pwm(duty_value1);

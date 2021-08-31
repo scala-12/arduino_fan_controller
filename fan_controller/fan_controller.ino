@@ -13,17 +13,28 @@ class InputSignalInfo {
   byte _pin;
   float _avg_pulse;
   byte _last_pulse;
+  float _last_avg_pulse4Duty;
+  byte _last_duty;
 
  public:
   InputSignalInfo(byte pin) {
     this->_pin = pin;
     this->_avg_pulse = FAN_PERIOD;
     this->_last_pulse = FAN_PERIOD;
+    this->_last_avg_pulse4Duty = 0;
+    this->_last_duty = 0;
   };
 
   /** вычисление заполнения; если значение импульса не изменялось, то показывается последнее сохраненное */
   word calculate_duty() {
-    word value = max(map(this->_avg_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
+    word value;
+    if (this->_last_avg_pulse4Duty == this->_avg_pulse) {
+      value = this->_last_duty;
+    } else {
+      value = max(map(this->_avg_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
+      this->_last_duty = value;
+      this->_last_avg_pulse4Duty == this->_avg_pulse;
+    }
 
     if (IS_DEBUG) {
       Serial.print("calculate duty ");

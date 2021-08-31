@@ -188,26 +188,49 @@ void loop() {
   word duty_value1;
   word duty_value2;
   if (speed_mode == SpeedMode::INPUT_IMPULSE) {
+    if (IS_DEBUG) {
+      Serial.println("speed mode: input impulse");
+    }
     read_pwm();
     duty_value1 = input_info1->calculate_duty();
     if (!use_only_input_1) {
       duty_value2 = input_info2->calculate_duty();
       if (mutation_mode == MutationMode::MAX_ONLY) {
-        byte max_duty = max(duty_value1, duty_value2);
-        duty_value1 = duty_value2 = max_duty;
+        word max_duty = max(duty_value1, duty_value2);
+        duty_value1 = max_duty;
+        duty_value2 = max_duty;
+        if (IS_DEBUG) {
+          Serial.print("mutation mode: max_only (");
+          Serial.print(max_duty);
+          Serial.println(")");
+        }
       } else if (mutation_mode == MutationMode::MAX_AND_AVERAGED) {
-        byte avaraged_value = (duty_value1 + duty_value2) / 2;
+        word avaraged_value = (duty_value1 + duty_value2) / 2;
         if (duty_value1 > duty_value2) {
           duty_value2 = avaraged_value;
         } else {
           duty_value1 = avaraged_value;
         }
+        if (IS_DEBUG) {
+          Serial.print("mutation mode: avaraged (");
+          Serial.print(duty_value1);
+          Serial.print("\t");
+          Serial.print(duty_value2);
+          Serial.println(")");
+        }
+      } else if (IS_DEBUG) {
+        Serial.println("mutation mode: immutable");
       }
     } else {
       duty_value2 = duty_value1;
     }
   } else {
-    duty_value1 = duty_value2 = (speed_mode == SpeedMode::MAX_ALWAYS) ? MAX_DUTY : MIN_DUTY;
+    if (IS_DEBUG) {
+      Serial.print("speed mode: ");
+      Serial.println((speed_mode == SpeedMode::MAX_ALWAYS) ? "MAX_DUTY" : "MIN_DUTY");
+    }
+    duty_value1 = (speed_mode == SpeedMode::MAX_ALWAYS) ? MAX_DUTY : MIN_DUTY;
+    duty_value2 = duty_value1;
   }
 
   output_controller1->apply_pwm(duty_value1);

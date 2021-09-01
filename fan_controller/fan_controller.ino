@@ -5,7 +5,7 @@ const word MIN_DUTY = 200;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
-const byte DUTIES_SIZE = 8;
+const byte DUTIES_SIZE = 10;
 const byte PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
 word duties[DUTIES_SIZE];
 

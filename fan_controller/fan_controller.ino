@@ -1,16 +1,19 @@
 #include <TimerOne.h>  // для управления ШИМ; может выдавать ошибку в заивисимости WProgram.h
 
-// TODO: экспонометр для инициализации MIN_DUTY 
+// TODO: экспонометр для инициализации MIN_DUTY
 const word MIN_DUTY = 200;   // минимальное значение заполнения
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
+// TODO: 2 битный переключатель для настройки DUTIES_SIZE {4, 5, 8, 10}, может другие значения
 const byte DUTIES_SIZE = 10;
 const byte PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
 word duties[DUTIES_SIZE];
 
+// TODO: переделать в DEFINE-блоки
 const bool IS_DEBUG = false;
 
+// TODO: сделать выбор алгоритма с помощью DEFINE
 float exp_running_average_adaptive(float new_value, float filtered_value);
 float exp_running_average(float new_value, float filtered_value);
 float median_filter5(byte value, byte* buffer);

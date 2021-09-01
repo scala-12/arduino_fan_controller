@@ -5,9 +5,12 @@ const byte MIN_DUTY = 200;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
-const float SMOOTHING_FACTOR = 0.2;  // коэффициент усреднения
-
 const bool IS_DEBUG = false;
+
+float exp_running_average_adaptive(float new_value, float filtered_value);
+float exp_running_average(float new_value, float filtered_value);
+float median_filter5(byte value, byte* buffer);
+float median_filter3(byte value, byte* buffer);
 
 class InputSignalInfo;
 class OutputSignalController;
@@ -16,16 +19,21 @@ class InputSignalInfo {
  private:
   const static byte _DUTIES_SIZE = 8;
   const static byte _PULSE_MULTIPLIER = FAN_PERIOD / _DUTIES_SIZE;
+  const static byte _BUFFER_SIZE = 5;
   byte _pin;
-  float _avg_pulse;
-  byte _last_pulse;
+  byte _buffer_step;
+  byte _avg_pulse;
+  byte _pulses_buffer[_BUFFER_SIZE];
   word _duties[_DUTIES_SIZE];
 
  public:
   InputSignalInfo(byte pin) {
     this->_pin = pin;
+    this->_buffer_step = 0;
     this->_avg_pulse = FAN_PERIOD;
-    this->_last_pulse = FAN_PERIOD;
+    for (byte i = 0; i < InputSignalInfo::_BUFFER_SIZE; ++i) {
+      this->_pulses_buffer[i] = FAN_PERIOD;
+    }
     for (byte i = 0; i < _DUTIES_SIZE; ++i) {
       this->_duties[i] = max(map((i + 1) * _PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
     }
@@ -60,9 +68,12 @@ class InputSignalInfo {
     } else if (value > FAN_PERIOD) {
       value = FAN_PERIOD;
     }
-    this->_last_pulse = value;
+    this->_pulses_buffer[this->_buffer_step] = value;
+    if (++this->_buffer_step > InputSignalInfo::_BUFFER_SIZE) {
+      this->_buffer_step = 0;
+    }
 
-    this->_avg_pulse = ((1 - SMOOTHING_FACTOR) * this->_avg_pulse) + (SMOOTHING_FACTOR * value);
+    this->_avg_pulse = median_filter5(value, this->_pulses_buffer);
     if (IS_DEBUG) {
       Serial.print("in ");
       Serial.print(this->_pin);
@@ -250,4 +261,81 @@ void loop() {
 
   output_controller1->apply_pwm(duty_value1);
   output_controller2->apply_pwm(duty_value2);
+}
+
+const byte MAX_PULSE_IMPULSE_DIFF = FAN_PERIOD / 4;
+float exp_running_average_adaptive(float new_value, float filtered_value) {
+  float smoothing_factor;
+  if (abs(new_value - filtered_value) > MAX_PULSE_IMPULSE_DIFF) {
+    smoothing_factor = 0.9;
+  } else {
+    smoothing_factor = 0.03;
+  }
+
+  filtered_value += (new_value - filtered_value) * smoothing_factor;
+  return filtered_value;
+}
+
+const float SMOOTHING_FACTOR = 0.2;  // коэффициент усреднения
+float exp_running_average(float new_value, float filtered_value) {
+  return ((1 - SMOOTHING_FACTOR) * filtered_value) + (SMOOTHING_FACTOR * new_value);
+}
+
+float median_filter5(byte value, byte* buffer) {
+  byte min_value = buffer[0];
+  byte max_value = buffer[0];
+  byte values3[3];
+  byte count_values = 0;
+  for (byte i = 1; i < 5; ++i) {
+    if (min_value >= buffer[i]) {
+      if (min_value != max_value) {
+        values3[count_values] = min_value;
+        count_values += 1;
+      }
+      min_value = buffer[i];
+    } else if (max_value <= buffer[i]) {
+      if (min_value != max_value) {
+        values3[count_values] = max_value;
+        count_values += 1;
+      }
+      max_value = buffer[i];
+    } else {
+      values3[count_values] = buffer[i];
+      count_values += 1;
+    }
+  }
+
+  byte middle;
+  if (count_values > 0) {
+    for (byte i = count_values - 1; i < 3; ++i) {
+      values3[i] = min_value;
+    }
+    if ((values3[0] <= values3[1]) && (values3[0] <= values3[2])) {
+      middle = min(values3[1], values3[2]);
+    } else {
+      if ((values3[1] <= values3[0]) && (values3[1] <= values3[2])) {
+        middle = min(values3[0], values3[2]);
+      } else {
+        middle = min(values3[0], values3[1]);
+      }
+    }
+  } else {
+    middle = min_value;
+  }
+
+  return middle;
+}
+
+float median_filter3(byte value, byte* buffer) {
+  byte middle;
+  if ((buffer[0] <= buffer[1]) && (buffer[0] <= buffer[2])) {
+    middle = min(buffer[1], buffer[2]);
+  } else {
+    if ((buffer[1] <= buffer[0]) && (buffer[1] <= buffer[2])) {
+      middle = min(buffer[0], buffer[2]);
+    } else {
+      middle = min(buffer[0], buffer[1]);
+    }
+  }
+  return middle;
 }

@@ -61,19 +61,20 @@ class InputSignalInfo {
 
   /** чтение текущего PWM */
   byte read_pulse() {
-    int value = pulseIn(this->_pin, HIGH, FAN_PERIOD);
-    if (value == 0) {
-      value = (digitalRead(this->_pin) == 0) ? 0 : FAN_PERIOD;
-    } else if (value > FAN_PERIOD) {
-      value = FAN_PERIOD;
+    byte value;
+    if (digitalRead(this->_pin) == LOW) {
+      value = pulseIn(this->_pin, HIGH, 100);
+    } else {
+      value = FAN_PERIOD - pulseIn(this->_pin, LOW, 100);
     }
+
     this->_pulses_buffer[this->_buffer_step] = value;
 
     if (++this->_buffer_step >= InputSignalInfo::_BUFFER_SIZE) {
       this->_buffer_step = 0;
     }
 
-    this->_avg_pulse = exp_running_average(value, this->_avg_pulse);
+    this->_avg_pulse = median_filter5(value, this->_pulses_buffer);
 
     if (IS_DEBUG) {
       Serial.print("in ");

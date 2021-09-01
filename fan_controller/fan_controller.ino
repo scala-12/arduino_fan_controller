@@ -1,5 +1,6 @@
 #include <TimerOne.h>  // для управления ШИМ; может выдавать ошибку в заивисимости WProgram.h
 
+// TODO: добавить чтение значения MIN_DUTY с переключателей 
 const byte MIN_DUTY = 200;   // минимальное значение заполнения
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
@@ -10,38 +11,38 @@ const bool IS_DEBUG = false;
 
 class InputSignalInfo {
  private:
+  const static byte _DUTIES_SIZE = 8;
+  const static byte _PULSE_MULTIPLIER = FAN_PERIOD / _DUTIES_SIZE;
   byte _pin;
   float _avg_pulse;
   byte _last_pulse;
-  float _last_avg_pulse4Duty;
-  byte _last_duty;
+  word _duties[_DUTIES_SIZE];
 
  public:
   InputSignalInfo(byte pin) {
     this->_pin = pin;
     this->_avg_pulse = FAN_PERIOD;
     this->_last_pulse = FAN_PERIOD;
-    this->_last_avg_pulse4Duty = 0;
-    this->_last_duty = 0;
+    for (byte i = 0; i < _DUTIES_SIZE; ++i) {
+      this->_duties[i] = max(map((i + 1) * _PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
+    }
   };
 
-  /** вычисление заполнения; если значение импульса не изменялось, то показывается последнее сохраненное */
-  word calculate_duty() {
-    word value;
-    if (this->_last_avg_pulse4Duty == this->_avg_pulse) {
-      value = this->_last_duty;
-    } else {
-      value = max(map(this->_avg_pulse, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
-      this->_last_duty = value;
-      this->_last_avg_pulse4Duty == this->_avg_pulse;
+  /** найти заполнение сигнала */
+  word get_duty() {
+    byte index = this->_avg_pulse / InputSignalInfo::_PULSE_MULTIPLIER;
+    if (index == InputSignalInfo::_DUTIES_SIZE) {
+      index -= 1;
     }
-
+    word value = this->_duties[index];
     if (IS_DEBUG) {
       Serial.print("calculate duty ");
       Serial.print(this->_pin);
       Serial.print(":\t");
       Serial.print(this->_avg_pulse);
-      Serial.print(" -> ");
+      Serial.print(" (");
+      Serial.print((index + 1) * InputSignalInfo::_PULSE_MULTIPLIER);
+      Serial.print(") -> ");
       Serial.println(value);
     }
 
@@ -203,9 +204,9 @@ void loop() {
       Serial.println("speed mode: input impulse");
     }
     read_pwm();
-    duty_value1 = input_info1->calculate_duty();
+    duty_value1 = input_info1->get_duty();
     if (!use_only_input_1) {
-      duty_value2 = input_info2->calculate_duty();
+      duty_value2 = input_info2->get_duty();
       if (mutation_mode == MutationMode::MAX_ONLY) {
         word max_duty = max(duty_value1, duty_value2);
         duty_value1 = max_duty;

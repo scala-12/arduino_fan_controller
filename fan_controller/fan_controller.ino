@@ -1,9 +1,13 @@
 #include <TimerOne.h>  // для управления ШИМ; может выдавать ошибку в заивисимости WProgram.h
 
 // TODO: добавить чтение значения MIN_DUTY с переключателей
-const byte MIN_DUTY = 200;   // минимальное значение заполнения
+const word MIN_DUTY = 200;   // минимальное значение заполнения
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
+
+const byte DUTIES_SIZE = 8;
+const byte PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
+word duties[DUTIES_SIZE];
 
 const bool IS_DEBUG = false;
 
@@ -17,14 +21,11 @@ class OutputSignalController;
 
 class InputSignalInfo {
  private:
-  const static byte _DUTIES_SIZE = 8;
-  const static byte _PULSE_MULTIPLIER = FAN_PERIOD / _DUTIES_SIZE;
   const static byte _BUFFER_SIZE = 5;
   byte _pin;
   byte _buffer_step;
   byte _avg_pulse;
   byte _pulses_buffer[_BUFFER_SIZE];
-  word _duties[_DUTIES_SIZE];
 
  public:
   InputSignalInfo(byte pin) {
@@ -34,25 +35,23 @@ class InputSignalInfo {
     for (byte i = 0; i < InputSignalInfo::_BUFFER_SIZE; ++i) {
       this->_pulses_buffer[i] = FAN_PERIOD;
     }
-    for (byte i = 0; i < _DUTIES_SIZE; ++i) {
-      this->_duties[i] = max(map((i + 1) * _PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
-    }
   };
 
   /** найти заполнение сигнала */
   word get_duty() {
-    byte index = this->_avg_pulse / InputSignalInfo::_PULSE_MULTIPLIER;
-    if (index == InputSignalInfo::_DUTIES_SIZE) {
+    byte index = this->_avg_pulse / PULSE_MULTIPLIER;
+    if (index == DUTIES_SIZE) {
       index -= 1;
     }
-    word value = this->_duties[index];
+
+    word value = duties[index];
     if (IS_DEBUG) {
       Serial.print("calculate duty ");
       Serial.print(this->_pin);
       Serial.print(":\t");
       Serial.print(this->_avg_pulse);
       Serial.print(" (");
-      Serial.print((index + 1) * InputSignalInfo::_PULSE_MULTIPLIER);
+      Serial.print((index + 1) * PULSE_MULTIPLIER);
       Serial.print(") -> ");
       Serial.println(value);
     }
@@ -69,11 +68,13 @@ class InputSignalInfo {
       value = FAN_PERIOD;
     }
     this->_pulses_buffer[this->_buffer_step] = value;
-    if (++this->_buffer_step > InputSignalInfo::_BUFFER_SIZE) {
+
+    if (++this->_buffer_step >= InputSignalInfo::_BUFFER_SIZE) {
       this->_buffer_step = 0;
     }
 
-    this->_avg_pulse = median_filter5(value, this->_pulses_buffer);
+    this->_avg_pulse = exp_running_average(value, this->_avg_pulse);
+
     if (IS_DEBUG) {
       Serial.print("in ");
       Serial.print(this->_pin);
@@ -172,9 +173,7 @@ byte read_pwm() {
 void setup() {
   Timer1.initialize(FAN_PERIOD);  // частота ШИМ ~25 кГц
 
-  if (IS_DEBUG) {
-    Serial.begin(9600);
-  }
+  Serial.begin(9600);
 
   pinMode(PWM_IN_PIN_1, INPUT);
   pinMode(PWM_IN_PIN_2, INPUT);
@@ -185,6 +184,10 @@ void setup() {
   pinMode(PWM_IN_PIN_2_DISSABLED_PIN, INPUT_PULLUP);
   pinMode(PWM_OUT_PIN_1, OUTPUT);
   pinMode(PWM_OUT_PIN_2, OUTPUT);
+
+  for (byte i = 0; i < DUTIES_SIZE; ++i) {
+    duties[i] = max(map((i + 1) * PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
+  }
 
   is_odd_tact = false;
   is_check_tact = true;

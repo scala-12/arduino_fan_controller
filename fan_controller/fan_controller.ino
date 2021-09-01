@@ -15,6 +15,7 @@ float exp_running_average_adaptive(float new_value, float filtered_value);
 float exp_running_average(float new_value, float filtered_value);
 float median_filter5(byte value, byte* buffer);
 float median_filter3(byte value, byte* buffer);
+byte read_pwm();
 
 class InputSignalInfo;
 class OutputSignalController;
@@ -164,11 +165,6 @@ MutationMode read_mutation_mode() {
   } else {
     return MutationMode::MAX_AND_AVERAGED;
   }
-}
-
-byte read_pwm() {
-  InputSignalInfo* input_info = (is_odd_tact) ? input_info1 : input_info2;
-  return input_info->read_pulse();
 }
 
 void setup() {
@@ -342,4 +338,9 @@ float median_filter3(byte value, byte* buffer) {
     }
   }
   return middle;
+}
+
+byte read_pwm() {
+  InputSignalInfo* input_info = (is_odd_tact) ? input_info1 : input_info2;
+  return input_info->read_pulse();
 }

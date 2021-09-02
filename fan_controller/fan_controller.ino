@@ -5,10 +5,9 @@ const word MIN_DUTY = 450;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
-// TODO: 2 битный переключатель для настройки DUTIES_SIZE {4, 5, 8, 10}, может другие значения
-const byte DUTIES_SIZE = 10;
-const byte PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
-word duties[DUTIES_SIZE];
+byte DUTIES_SIZE;  // из множества {4, 5, 8, 10}
+byte PULSE_MULTIPLIER;
+word duties[10];  // до 10 отрезков (DUTIES_SIZE <= 10)
 
 bool debug_mode = false;
 
@@ -138,7 +137,11 @@ const byte PWM_IN_PIN_2_DISSABLED_PIN = 8;  // использовать толь
 
 const byte PWM_OUT_PIN_1 = 9;   // пин PWM сигнала для первой группы
 const byte PWM_OUT_PIN_2 = 10;  // пин PWM сигнала для второй группы
+
 const byte DEBUG_MODE_PIN = 11;  // пин включения debug-режима
+
+const byte DUTY_SIZE_PIN_1 = 12;  // пин включения debug-режима
+const byte DUTY_SIZE_PIN_2 = 13;  // пин включения debug-режима
 
 InputSignalInfo* input_info1 = new InputSignalInfo(PWM_IN_PIN_1);  // информация о первом входном сигнале
 InputSignalInfo* input_info2;                                      // информация о втором входном сигнале
@@ -181,6 +184,21 @@ void setup() {
   pinMode(PWM_OUT_PIN_1, OUTPUT);
   pinMode(PWM_OUT_PIN_2, OUTPUT);
   pinMode(DEBUG_MODE_PIN, INPUT_PULLUP);
+  pinMode(DUTY_SIZE_PIN_1, INPUT_PULLUP);
+  pinMode(DUTY_SIZE_PIN_2, INPUT_PULLUP);
+
+  if (digitalRead(DUTY_SIZE_PIN_1) == 0) {
+    if (digitalRead(DUTY_SIZE_PIN_2) == 0) {
+      DUTIES_SIZE = 4;
+    } else {
+      DUTIES_SIZE = 5;
+    }
+  } else if (digitalRead(DUTY_SIZE_PIN_2) == 0) {
+    DUTIES_SIZE = 8;
+  } else {
+    DUTIES_SIZE = 10;
+  }
+  PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
 
   for (byte i = 0; i < DUTIES_SIZE; ++i) {
     duties[i] = max(map((i + 1) * PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);

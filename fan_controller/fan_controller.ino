@@ -12,10 +12,7 @@ word duties[DUTIES_SIZE];
 
 bool debug_mode = false;
 
-float exp_running_average_adaptive(float new_value, float filtered_value);
-float exp_running_average(float new_value, float filtered_value);
 float median_filter5(byte value, byte* buffer);
-float median_filter3(byte value, byte* buffer);
 byte read_pwm();
 
 class InputSignalInfo;
@@ -268,24 +265,6 @@ void loop() {
   output_controller2->apply_pwm(duty_value2);
 }
 
-const byte MAX_PULSE_IMPULSE_DIFF = FAN_PERIOD / 4;
-float exp_running_average_adaptive(float new_value, float filtered_value) {
-  float smoothing_factor;
-  if (abs(new_value - filtered_value) > MAX_PULSE_IMPULSE_DIFF) {
-    smoothing_factor = 0.9;
-  } else {
-    smoothing_factor = 0.03;
-  }
-
-  filtered_value += (new_value - filtered_value) * smoothing_factor;
-  return filtered_value;
-}
-
-const float SMOOTHING_FACTOR = 0.2;  // коэффициент усреднения
-float exp_running_average(float new_value, float filtered_value) {
-  return ((1 - SMOOTHING_FACTOR) * filtered_value) + (SMOOTHING_FACTOR * new_value);
-}
-
 float median_filter5(byte value, byte* buffer) {
   byte min_value = buffer[0];
   byte max_value = buffer[0];
@@ -328,20 +307,6 @@ float median_filter5(byte value, byte* buffer) {
     middle = min_value;
   }
 
-  return middle;
-}
-
-float median_filter3(byte value, byte* buffer) {
-  byte middle;
-  if ((buffer[0] <= buffer[1]) && (buffer[0] <= buffer[2])) {
-    middle = min(buffer[1], buffer[2]);
-  } else {
-    if ((buffer[1] <= buffer[0]) && (buffer[1] <= buffer[2])) {
-      middle = min(buffer[0], buffer[2]);
-    } else {
-      middle = min(buffer[0], buffer[1]);
-    }
-  }
   return middle;
 }
 

@@ -10,10 +10,8 @@ const byte DUTIES_SIZE = 10;
 const byte PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
 word duties[DUTIES_SIZE];
 
-// TODO: переделать в DEFINE-блоки
-const bool IS_DEBUG = false;
+bool debug_mode = false;
 
-// TODO: сделать выбор алгоритма с помощью DEFINE
 float exp_running_average_adaptive(float new_value, float filtered_value);
 float exp_running_average(float new_value, float filtered_value);
 float median_filter5(byte value, byte* buffer);
@@ -49,7 +47,7 @@ class InputSignalInfo {
     }
 
     word value = duties[index];
-    if (IS_DEBUG) {
+    if (debug_mode) {
       Serial.print("calculate duty ");
       Serial.print(this->_pin);
       Serial.print(":\t");
@@ -80,7 +78,7 @@ class InputSignalInfo {
 
     this->_avg_pulse = median_filter5(value, this->_pulses_buffer);
 
-    if (IS_DEBUG) {
+    if (debug_mode) {
       Serial.print("in ");
       Serial.print(this->_pin);
       Serial.print(": ");
@@ -102,7 +100,7 @@ class OutputSignalController {
   };
 
   void apply_pwm(word duty) {
-    if (IS_DEBUG) {
+    if (debug_mode) {
       Serial.print("out ");
       Serial.print(this->_pin);
       Serial.print(":\t");
@@ -143,6 +141,7 @@ const byte PWM_IN_PIN_2_DISSABLED_PIN = 8;  // использовать толь
 
 const byte PWM_OUT_PIN_1 = 9;   // пин PWM сигнала для первой группы
 const byte PWM_OUT_PIN_2 = 10;  // пин PWM сигнала для второй группы
+const byte DEBUG_MODE_PIN = 11;  // пин включения debug-режима
 
 InputSignalInfo* input_info1 = new InputSignalInfo(PWM_IN_PIN_1);  // информация о первом входном сигнале
 InputSignalInfo* input_info2;                                      // информация о втором входном сигнале
@@ -184,6 +183,7 @@ void setup() {
   pinMode(PWM_IN_PIN_2_DISSABLED_PIN, INPUT_PULLUP);
   pinMode(PWM_OUT_PIN_1, OUTPUT);
   pinMode(PWM_OUT_PIN_2, OUTPUT);
+  pinMode(DEBUG_MODE_PIN, INPUT_PULLUP);
 
   for (byte i = 0; i < DUTIES_SIZE; ++i) {
     duties[i] = max(map((i + 1) * PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
@@ -194,6 +194,8 @@ void setup() {
   speed_mode = read_speed_mode();
   mutation_mode = read_mutation_mode();
   use_only_input_1 = digitalRead(PWM_IN_PIN_2_DISSABLED_PIN) == 0;
+
+  debug_mode = digitalRead(DEBUG_MODE_PIN) == 0;
 
   if (!use_only_input_1) {
     input_info2 = new InputSignalInfo(PWM_IN_PIN_2);
@@ -217,7 +219,7 @@ void loop() {
   word duty_value1;
   word duty_value2;
   if (speed_mode == SpeedMode::INPUT_IMPULSE) {
-    if (IS_DEBUG) {
+    if (debug_mode) {
       Serial.println("speed mode: input impulse");
     }
     read_pwm();
@@ -228,7 +230,7 @@ void loop() {
         word max_duty = max(duty_value1, duty_value2);
         duty_value1 = max_duty;
         duty_value2 = max_duty;
-        if (IS_DEBUG) {
+        if (debug_mode) {
           Serial.print("mutation mode: max_only (");
           Serial.print(max_duty);
           Serial.println(")");
@@ -240,21 +242,21 @@ void loop() {
         } else {
           duty_value1 = avaraged_value;
         }
-        if (IS_DEBUG) {
+        if (debug_mode) {
           Serial.print("mutation mode: avaraged (");
           Serial.print(duty_value1);
           Serial.print("\t");
           Serial.print(duty_value2);
           Serial.println(")");
         }
-      } else if (IS_DEBUG) {
+      } else if (debug_mode) {
         Serial.println("mutation mode: immutable");
       }
     } else {
       duty_value2 = duty_value1;
     }
   } else {
-    if (IS_DEBUG) {
+    if (debug_mode) {
       Serial.print("speed mode: ");
       Serial.println((speed_mode == SpeedMode::MAX_ALWAYS) ? "MAX_DUTY" : "MIN_DUTY");
     }

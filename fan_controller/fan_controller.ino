@@ -5,9 +5,8 @@ const word MIN_DUTY = 450;   // минимальное значение запо
 const word MAX_DUTY = 1023;  // максимальное значение заполнения
 const byte FAN_PERIOD = 40;  // период сигнала в микросекундах
 
-byte DUTIES_SIZE;  // из множества {4, 5, 8, 10}
-byte PULSE_MULTIPLIER;
-word duties[10];  // до 10 отрезков (DUTIES_SIZE <= 10)
+byte pulse_sense_width;  // из множества {4, 5, 8, 10}
+word pulse2Duty[FAN_PERIOD + 1];
 
 bool debug_mode = false;
 
@@ -22,14 +21,14 @@ class InputSignalInfo {
   const static byte _BUFFER_SIZE = 5;
   byte _pin;
   byte _buffer_step;
-  byte _avg_pulse;
+  byte _filtered_pulse;
   byte _pulses_buffer[_BUFFER_SIZE];
 
  public:
   InputSignalInfo(byte pin) {
     this->_pin = pin;
     this->_buffer_step = 0;
-    this->_avg_pulse = FAN_PERIOD;
+    this->_filtered_pulse = FAN_PERIOD;
     for (byte i = 0; i < InputSignalInfo::_BUFFER_SIZE; ++i) {
       this->_pulses_buffer[i] = FAN_PERIOD;
     }
@@ -37,50 +36,44 @@ class InputSignalInfo {
 
   /** найти заполнение сигнала */
   word get_duty() {
-    byte index = this->_avg_pulse / PULSE_MULTIPLIER;
-    if (index == DUTIES_SIZE) {
-      index -= 1;
-    }
-
-    word value = duties[index];
+    word duty = pulse2Duty[this->_filtered_pulse];
     if (debug_mode) {
-      Serial.print("calculate duty ");
+      Serial.print("pulse2Duty ");
       Serial.print(this->_pin);
       Serial.print(":\t");
-      Serial.print(this->_avg_pulse);
-      Serial.print(" (");
-      Serial.print((index + 1) * PULSE_MULTIPLIER);
-      Serial.print(") -> ");
-      Serial.println(value);
+      Serial.print(this->_filtered_pulse);
+      Serial.print(" -> ");
+      Serial.println(duty);
     }
 
-    return value;
+    return duty;
   };
 
   /** чтение текущего PWM */
   byte read_pulse() {
-    byte value;
+    byte pulse;
     if (digitalRead(this->_pin) == LOW) {
-      value = pulseIn(this->_pin, HIGH, 100);
+      pulse = pulseIn(this->_pin, HIGH, 100);
     } else {
-      value = FAN_PERIOD - pulseIn(this->_pin, LOW, 100);
+      pulse = FAN_PERIOD - pulseIn(this->_pin, LOW, 100);
     }
 
-    this->_pulses_buffer[this->_buffer_step] = value;
+    this->_pulses_buffer[this->_buffer_step] = pulse;
 
     if (++this->_buffer_step >= InputSignalInfo::_BUFFER_SIZE) {
       this->_buffer_step = 0;
     }
 
-    this->_avg_pulse = median_filter5(value, this->_pulses_buffer);
+    // возможно, хватит и использования по трем значениям
+    this->_filtered_pulse = median_filter5(pulse, this->_pulses_buffer);
 
     if (debug_mode) {
       Serial.print("in ");
       Serial.print(this->_pin);
       Serial.print(": ");
-      Serial.print(value);
+      Serial.print(pulse);
       Serial.print(" (");
-      Serial.print(this->_avg_pulse);
+      Serial.print(this->_filtered_pulse);
       Serial.println(")");
     }
   };
@@ -189,20 +182,21 @@ void setup() {
 
   if (digitalRead(DUTY_SIZE_PIN_1) == 0) {
     if (digitalRead(DUTY_SIZE_PIN_2) == 0) {
-      DUTIES_SIZE = 4;
+      pulse_sense_width = 10;
     } else {
-      DUTIES_SIZE = 5;
+      pulse_sense_width = 8;
     }
   } else if (digitalRead(DUTY_SIZE_PIN_2) == 0) {
-    DUTIES_SIZE = 8;
+    pulse_sense_width = 5;
   } else {
-    DUTIES_SIZE = 10;
+    pulse_sense_width = 4;
   }
-  PULSE_MULTIPLIER = FAN_PERIOD / DUTIES_SIZE;
 
-  for (byte i = 0; i < DUTIES_SIZE; ++i) {
-    duties[i] = max(map((i + 1) * PULSE_MULTIPLIER, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
+  for (byte i = 0; i < FAN_PERIOD; ++i) {
+    byte pulse_multiplier = (i + pulse_sense_width) / pulse_sense_width;
+    pulse2Duty[i] = max(map(pulse_multiplier * pulse_sense_width, 0, FAN_PERIOD, 0, MAX_DUTY), MIN_DUTY);
   }
+  pulse2Duty[FAN_PERIOD + 1] = pulse2Duty[FAN_PERIOD];
 
   is_odd_tact = false;
   is_check_tact = true;

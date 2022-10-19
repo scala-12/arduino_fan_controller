@@ -3,18 +3,17 @@
 
 // #define DEBUG_MODE_ON
 
+// вариант вычисления выходных PWM из входных PWM (для SpeedMode::INPUT_IMPULSE)
+// выбрать только один
+#define USE_MAX_PERCENT       // вычисленные сигналы сравниваются и выбирается максимальный на обе группы
+// #define USE_MAX_AND_AVERAGED  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
+
 class SignalController;
 
 enum SpeedMode {  // тип выбора значения PWM
   INPUT_IMPULSE,  // на основе входных PWM
   MAX_ALWAYS,     // максимально значение выходного PWM; входные сигналы не используются
   MIN_ALWAYS,     // минимально значение выходного PWM; входные сигналы не используются
-};
-
-enum MutationMode {  // вариант вычисления выходных PWM из входных PWM (для SpeedMode::INPUT_IMPULSE)
-  MAX_PERCENT,       // max PWM из входных на все выходы
-  MAX_AND_AVERAGED,  // max PWM на группу, второй усредняется
-  IMMUTABLE_VALUE,   // прямоток PWM
 };
 
 // пины настройки минимального DUTY
@@ -38,7 +37,6 @@ const byte PWM_OUT_PIN_1 = 9;
 const byte PWM_OUT_PIN_2 = 10;
 
 SpeedMode speed_mode;        // режим скорости
-MutationMode mutation_mode;  // режим вычисления выходных PWM
 bool is_odd_tact;       // такт измерений
 bool is_check_tact;     // такт проверки режимов
 
@@ -53,24 +51,25 @@ SpeedMode read_speed_mode();
 
 class SignalController {
  public:
+  const static int MAX_DUTY = 1023;   // максимальное значение заполнения
   const static byte FAN_PERIOD = 40;  // период сигнала в микросекундах
  private:
   const static byte _BUFFER_SIZE = 5;
-  const static int _MAX_DUTY = 1023;  // максимальное значение заполнения
   const static byte _PULSE_SENSE_WIDTH = 4;  // из множества {4, 5, 8, 10}
 
-  byte _pwm_in_pin;
-  byte _pwm_out_pin;
-  byte _duty_pin;
-  byte _pulse_pin;
-  byte _buffer_step;
-  byte _filtered_pulse;
-  byte _pulses_buffer[_BUFFER_SIZE];
-  int _pulse_2duty[FAN_PERIOD + 1];
-  int _min_duty;
-  byte _min_pulse;
-  byte _pulse_2percent[FAN_PERIOD + 1];
-  byte _percent_2pulse[101];
+  byte _pwm_in_pin;   // пин входящего PWM
+  byte _pwm_out_pin;  // пин выходящего PWM
+  byte _duty_pin;     // пин настройки минимального значения DUTY через энкодер
+  byte _pulse_pin;    // пин настройки минимального значения PULSE через энкодер
+  byte _buffer_step;  // шаг в буффере; буфер записывается циклически
+  byte _filtered_pulse;  // среднее значение PULSE, вычисленное по медиане
+  byte _pulses_buffer[_BUFFER_SIZE];  // буффер для вычисления FILTERED_PULSE
+  int _pulse_2duty[FAN_PERIOD + 1];   // кеш; соответствие PULSE->DUTY (пример: 0..40->0..1023)
+  int _min_duty;                      // минимальное значение DUTY; меньше этого значения PWM быть не может
+  byte _min_pulse;                    // минимальное значение PULSE; если входящий PWM меньше, то ему будет назначено MIN-DUTY
+  byte _pulse_2percent[FAN_PERIOD + 1]; // кеш; соответствие PULSE->DUTY_PERCENT (пример: 0..40->0..100)
+  byte _percent_2pulse[101];            // кеш; соответствие DUTY_PERCENT->PULSE (пример: 0..100->0..40)
+  void _calculate_pulse_n_duty();  // вычисление переменных для работы с DUTY и PULSE
 
  public:
   SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin);
@@ -101,10 +100,15 @@ void setup() {
   is_check_tact = true;
 
   speed_mode = read_speed_mode();
-  mutation_mode = MutationMode::MAX_PERCENT;
 
-  controllers[0] = new SignalController(PWM_IN_PIN_1, PWM_OUT_PIN_1, MIN_DUTY_PIN_1, MIN_PULSE_PIN_1);
-  controllers[1] = new SignalController(PWM_IN_PIN_2, PWM_OUT_PIN_2, MIN_DUTY_PIN_2, MIN_PULSE_PIN_2);
+  controllers[0] = new SignalController(
+      PWM_IN_PIN_1, PWM_OUT_PIN_1,
+      MIN_DUTY_PIN_1, MIN_PULSE_PIN_1
+  );
+  controllers[1] = new SignalController(
+      PWM_IN_PIN_2, PWM_OUT_PIN_2,
+      MIN_DUTY_PIN_2, MIN_PULSE_PIN_2
+  );
 
   controllers[0]->read_pulse();
   controllers[1]->read_pulse();
@@ -130,39 +134,39 @@ void loop() {
     read_pulse_by_tact();
     percent_1 = controllers[0]->get_percent();
     percent_2 = controllers[1]->get_percent();
-    if (mutation_mode == MutationMode::MAX_PERCENT) {
-      if (percent_1 > percent_2) {
-        percent_2 = percent_1;
-      } else {
-        percent_1 = percent_2;
-      }
-#ifdef DEBUG_MODE_ON
-      Serial.print("mutation mode: MAX_PERCENT (pulse ");
-      Serial.print(percent_1);
-      Serial.println(")");
-#endif
-    } else if (mutation_mode == MutationMode::MAX_AND_AVERAGED) {
-#ifdef DEBUG_MODE_ON
-      Serial.print("mutation mode: avaraged (");
-      Serial.print(percent_1);
-      Serial.print("\t");
-      Serial.print(percent_2);
-      Serial.print(")\t->\t(");
-#endif
-      if (percent_1 > percent_2) {
-        percent_2 = (percent_1 + percent_2) / 2;
-      } else {
-        percent_1 = (percent_1 + percent_2) / 2;
-      }
-#ifdef DEBUG_MODE_ON
-      Serial.print(percent_1);
-      Serial.print("\t");
-      Serial.print(percent_2);
-      Serial.println(")");
-#endif
+#ifdef USE_MAX_PERCENT
+    if (percent_1 > percent_2) {
+      percent_2 = percent_1;
     } else {
-      Serial.println("mutation mode: ERROR, immutable");
+      percent_1 = percent_2;
     }
+  #ifdef DEBUG_MODE_ON
+    Serial.print("mutation mode: MAX_PERCENT (pulse ");
+    Serial.print(percent_1);
+    Serial.println(")");
+  #endif
+#elif defined(USE_MAX_AND_AVERAGED)
+  #ifdef DEBUG_MODE_ON
+    Serial.print("mutation mode: avaraged (");
+    Serial.print(percent_1);
+    Serial.print("\t");
+    Serial.print(percent_2);
+    Serial.print(")\t->\t(");
+  #endif
+    if (percent_1 > percent_2) {
+      percent_2 = (percent_1 + percent_2) / 2;
+    } else {
+      percent_1 = (percent_1 + percent_2) / 2;
+    }
+  #ifdef DEBUG_MODE_ON
+    Serial.print(percent_1);
+    Serial.print("\t");
+    Serial.print(percent_2);
+    Serial.println(")");
+  #endif
+#else
+    Serial.println("mutation mode: ERROR, immutable");
+#endif
   } else {
 #ifdef DEBUG_MODE_ON
     Serial.print("speed mode: ");
@@ -177,13 +181,13 @@ void loop() {
 
 void SignalController::update_pulse_2duty() {
   int duty_pin_value = analogReadFast(this->_duty_pin);
-  int min_duty = min(SignalController::_MAX_DUTY - 1, abs(duty_pin_value));
+  int min_duty = min(SignalController::MAX_DUTY - 1, abs(duty_pin_value));
   int pulse_pin_value = analogReadFast(this->_pulse_pin);
   byte min_pulse = min(
       SignalController::FAN_PERIOD - 1,
       map(
-          min(SignalController::_MAX_DUTY, abs(pulse_pin_value)),
-          0, SignalController::_MAX_DUTY,
+          min(SignalController::MAX_DUTY, abs(pulse_pin_value)),
+          0, SignalController::MAX_DUTY,
           0, SignalController::FAN_PERIOD));
   if ((abs(min_duty - this->_min_duty) > 15) || (abs(min_pulse - this->_min_pulse) > 1)) {
     Serial.print(this->_pulse_pin);
@@ -200,51 +204,55 @@ void SignalController::update_pulse_2duty() {
 
     this->_min_duty = min_duty;
     this->_min_pulse = min_pulse;
-    // TODO: оптимизировать
-    int prev_percent = -1;
-    int min_percent = -1;
-    for (byte i = 0;
-         i <= SignalController::FAN_PERIOD;
-         ++i) {
-      byte pulse_multiplier = (i + SignalController::_PULSE_SENSE_WIDTH) /
-                              SignalController::_PULSE_SENSE_WIDTH;
-      byte pulse_value = min(
-          pulse_multiplier * SignalController::_PULSE_SENSE_WIDTH, SignalController::FAN_PERIOD);
-      byte percent;
-      int duty;
-      if (pulse_value < min_pulse) {
-        duty = min_duty;
-        percent = 0;
-      } else {
-        duty = map(
-            pulse_value,
-            min_pulse, SignalController::FAN_PERIOD,
-            min_duty, SignalController::_MAX_DUTY);
-        percent = map(
-            pulse_value,
-            min_pulse, SignalController::FAN_PERIOD,
-            0, 100);
-        if (prev_percent != -1) {
-          for (byte j = prev_percent + 1;
-               j <= percent;
-               ++j) {
-            this->_percent_2pulse[j] = pulse_value;
-          }
+    this->_calculate_pulse_n_duty();
+  }
+}
+
+void SignalController::_calculate_pulse_n_duty() {
+  // TODO: оптимизировать
+  int prev_percent = -1;
+  int min_percent = -1;
+  for (byte i = 0;
+       i <= SignalController::FAN_PERIOD;
+       ++i) {
+    byte pulse_multiplier = (i + SignalController::_PULSE_SENSE_WIDTH) /
+                            SignalController::_PULSE_SENSE_WIDTH;
+    byte pulse_value = min(
+        pulse_multiplier * SignalController::_PULSE_SENSE_WIDTH, SignalController::FAN_PERIOD);
+    byte percent;
+    int duty;
+    if (pulse_value < this->_min_pulse) {
+      duty = this->_min_duty;
+      percent = 0;
+    } else {
+      duty = map(
+          pulse_value,
+          this->_min_pulse, SignalController::FAN_PERIOD,
+          this->_min_duty, SignalController::MAX_DUTY);
+      percent = map(
+          pulse_value,
+          this->_min_pulse, SignalController::FAN_PERIOD,
+          0, 100);
+      if (prev_percent != -1) {
+        for (byte j = prev_percent + 1;
+             j <= percent;
+             ++j) {
+          this->_percent_2pulse[j] = pulse_value;
         }
       }
-      this->_pulse_2duty[i] = duty;
-      this->_pulse_2percent[i] = percent;
-      if (prev_percent != percent) {
-        prev_percent = percent;
-      }
-      if ((min_percent == -1) && (i == min_pulse)) {
-        min_percent = percent;
-      }
     }
-    if (min_percent != -1) {
-      for (byte j = 0; j <= min_percent; ++j) {
-        this->_percent_2pulse[j] = min_pulse;
-      }
+    this->_pulse_2duty[i] = duty;
+    this->_pulse_2percent[i] = percent;
+    if (prev_percent != percent) {
+      prev_percent = percent;
+    }
+    if ((min_percent == -1) && (i == this->_min_pulse)) {
+      min_percent = percent;
+    }
+  }
+  if (min_percent != -1) {
+    for (byte j = 0; j <= min_percent; ++j) {
+      this->_percent_2pulse[j] = this->_min_pulse;
     }
   }
 }
@@ -256,14 +264,14 @@ SignalController::SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_
   this->_pulse_pin = pulse_pin;
   this->_buffer_step = 0;
   this->_filtered_pulse = SignalController::FAN_PERIOD;
-  this->_min_duty = SignalController::_MAX_DUTY;
+  this->_min_duty = SignalController::MAX_DUTY;
   this->_min_pulse = SignalController::FAN_PERIOD;
   for (byte i = 0; i < SignalController::_BUFFER_SIZE; ++i) {
     this->_pulses_buffer[i] = SignalController::FAN_PERIOD;
   }
   for (byte i = 0; i <= SignalController::FAN_PERIOD; ++i) {
     this->_pulse_2percent[i] = 100;
-    this->_pulse_2duty[i] = SignalController::_MAX_DUTY;
+    this->_pulse_2duty[i] = SignalController::MAX_DUTY;
   }
   for (byte i = 0; i <= 100; ++i) {
     this->_percent_2pulse[i] = SignalController::FAN_PERIOD;

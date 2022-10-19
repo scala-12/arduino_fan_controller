@@ -3,6 +3,12 @@
 
 // #define DEBUG_MODE_ON
 
+// #define MANUAL_SETTINGS  // для работы необходимо задать значения MIN_PULSE и MIN_DUTY ниже
+#define MIN_PULSE_1
+#define MIN_PULSE_2
+#define MIN_DUTY_1
+#define MIN_DUTY_2
+
 // вариант вычисления выходных PWM из входных PWM (для SpeedMode::INPUT_IMPULSE)
 // выбрать только один
 #define USE_MAX_PERCENT       // вычисленные сигналы сравниваются и выбирается максимальный на обе группы
@@ -59,8 +65,10 @@ class SignalController {
 
   byte _pwm_in_pin;   // пин входящего PWM
   byte _pwm_out_pin;  // пин выходящего PWM
+#ifndef MANUAL_SETTINGS
   byte _duty_pin;     // пин настройки минимального значения DUTY через энкодер
   byte _pulse_pin;    // пин настройки минимального значения PULSE через энкодер
+#endif
   byte _buffer_step;  // шаг в буффере; буфер записывается циклически
   byte _filtered_pulse;  // среднее значение PULSE, вычисленное по медиане
   byte _pulses_buffer[_BUFFER_SIZE];  // буффер для вычисления FILTERED_PULSE
@@ -69,10 +77,17 @@ class SignalController {
   byte _min_pulse;                    // минимальное значение PULSE; если входящий PWM меньше, то ему будет назначено MIN-DUTY
   byte _pulse_2percent[FAN_PERIOD + 1]; // кеш; соответствие PULSE->DUTY_PERCENT (пример: 0..40->0..100)
   byte _percent_2pulse[101];            // кеш; соответствие DUTY_PERCENT->PULSE (пример: 0..100->0..40)
+  void _init(
+      byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin,
+      int min_duty, byte min_pulse);
   void _calculate_pulse_n_duty();  // вычисление переменных для работы с DUTY и PULSE
 
  public:
-  SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin);
+#ifdef MANUAL_SETTINGS
+  SignalController(byte pwm_in_pin, byte pwm_out_pin, int min_duty, byte min_pulse);  // инициализация с заданными параметров минимальных PULSE и DUTY
+#else
+  SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin);  // инициализация с вычислением параметров минимальных PULSE и DUTY
+#endif
   void update_pulse_2duty();
   int get_min_duty();
   byte read_pulse();
@@ -103,11 +118,19 @@ void setup() {
 
   controllers[0] = new SignalController(
       PWM_IN_PIN_1, PWM_OUT_PIN_1,
+#ifdef MANUAL_SETTINGS
+      MIN_DUTY_1, MIN_PULSE_1
+#else
       MIN_DUTY_PIN_1, MIN_PULSE_PIN_1
+#endif
   );
   controllers[1] = new SignalController(
       PWM_IN_PIN_2, PWM_OUT_PIN_2,
+#ifdef MANUAL_SETTINGS
+      MIN_DUTY_2, MIN_PULSE_2
+#else
       MIN_DUTY_PIN_2, MIN_PULSE_PIN_2
+#endif
   );
 
   controllers[0]->read_pulse();
@@ -122,7 +145,9 @@ void loop() {
       speed_mode = read_speed_mode();
     }
   }
+#ifndef MANUAL_SETTINGS
   update_pulse_2duty_by_tact();
+#endif
 
   byte percent_1;
   byte percent_2;
@@ -180,6 +205,9 @@ void loop() {
 }
 
 void SignalController::update_pulse_2duty() {
+#ifdef MANUAL_SETTINGS
+  this->_calculate_pulse_n_duty();
+#else
   int duty_pin_value = analogReadFast(this->_duty_pin);
   int min_duty = min(SignalController::MAX_DUTY - 1, abs(duty_pin_value));
   int pulse_pin_value = analogReadFast(this->_pulse_pin);
@@ -206,6 +234,7 @@ void SignalController::update_pulse_2duty() {
     this->_min_pulse = min_pulse;
     this->_calculate_pulse_n_duty();
   }
+#endif
 }
 
 void SignalController::_calculate_pulse_n_duty() {
@@ -257,15 +286,20 @@ void SignalController::_calculate_pulse_n_duty() {
   }
 }
 
-SignalController::SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin) {
+void SignalController::_init(
+    byte pwm_in_pin, byte pwm_out_pin,
+    byte duty_pin, byte pulse_pin,
+    int min_duty, byte min_pulse) {
   this->_pwm_in_pin = pwm_in_pin;
   this->_pwm_out_pin = pwm_out_pin;
+#ifndef MANUAL_SETTINGS
   this->_duty_pin = duty_pin;
   this->_pulse_pin = pulse_pin;
+#endif
   this->_buffer_step = 0;
   this->_filtered_pulse = SignalController::FAN_PERIOD;
-  this->_min_duty = SignalController::MAX_DUTY;
-  this->_min_pulse = SignalController::FAN_PERIOD;
+  this->_min_duty = min_duty;
+  this->_min_pulse = min_pulse;
   for (byte i = 0; i < SignalController::_BUFFER_SIZE; ++i) {
     this->_pulses_buffer[i] = SignalController::FAN_PERIOD;
   }
@@ -278,6 +312,21 @@ SignalController::SignalController(byte pwm_in_pin, byte pwm_out_pin, byte duty_
   }
   this->update_pulse_2duty();
 }
+
+#ifndef MANUAL_SETTINGS
+SignalController::SignalController(
+    byte pwm_in_pin, byte pwm_out_pin, byte duty_pin, byte pulse_pin) {
+  SignalController::_init(
+      pwm_in_pin, pwm_out_pin,
+      duty_pin, pulse_pin,
+      SignalController::MAX_DUTY, SignalController::FAN_PERIOD);
+}
+#else
+SignalController::SignalController(
+    byte pwm_in_pin, byte pwm_out_pin, int min_duty, byte min_pulse) {
+  SignalController::_init(pwm_in_pin, pwm_out_pin, 0, 0, min_duty, min_pulse);
+}
+#endif
 
 int SignalController::get_duty_by_percent(byte percent) {
   return this->_pulse_2duty[this->_percent_2pulse[percent]];

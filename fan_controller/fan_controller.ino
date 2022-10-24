@@ -3,19 +3,35 @@
 #include "extra_functions.h"
 
 // #define DEBUG_MODE_ON
+// #define DEBUG_OUTPUT
+// #define DEBUG_INPUT
 
-// вариант вычисления выходных PWM из входных PWM (для SpeedMode::INPUT_IMPULSE)
-// выбрать только один
-// #define USE_MAX_PERCENT       // вычисленные сигналы сравниваются и выбирается максимальный на обе группы
+// #define USE_ONLY_ONE_OUTPUT // использовать только первый выход; второй не используется. Режим USE_MAX_PERCENT принудительно
+#define USE_MAX_PERCENT       // вычисленные сигналы сравниваются и выбирается максимальный на обе группы
 // #define USE_MAX_AND_AVERAGED  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
-
-#define MIN_SPEED_ONLY  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
-
+// #define MIN_SPEED_ONLY  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
+#define WAKE_UP_PERCENT 75 // процент для выбора DUTY из диапазона[min_duty..MAX_DUTY]
 #define MANUAL_SETTINGS  // для работы необходимо задать значения MIN_PULSE и MIN_DUTY ниже
-#define MIN_PULSE_1 5
-#define MIN_PULSE_2 15
-#define MIN_DUTY_1 440
-#define MIN_DUTY_2 154
+#define MIN_PULSE_1  // 0..(FAN_PERIOD-1)
+#define MIN_PULSE_2  // 0..(FAN_PERIOD-1)
+#define MIN_DUTY_1   // 0..(MAX_DUTY-1)
+#define MIN_DUTY_2   // 0..(MAX_DUTY-1)
+#define PULSE_SENSE_WIDTH 4  // из множества {4, 5, 8, 10}
+
+
+#ifdef USE_ONLY_ONE_OUTPUT
+  #define USE_MAX_PERCENT
+  #ifdef MIN_DUTY_1
+    #define MIN_DUTY_2 MIN_DUTY_1
+  #endif
+#endif
+#ifdef USE_MAX_PERCENT
+  #undef USE_MAX_AND_AVERAGED
+#endif
+#ifdef DEBUG_MODE_ON
+  #define DEBUG_OUTPUT
+  #define DEBUG_INPUT
+#endif
 
 enum SpeedMode {  // тип выбора значения PWM
   INPUT_IMPULSE,  // на основе входных PWM
@@ -26,7 +42,6 @@ enum SpeedMode {  // тип выбора значения PWM
 #define MAX_DUTY 1023  // максимальное значение заполнения
 #define FAN_PERIOD 40  // период сигнала в микросекундах
 #define BUFFER_SIZE 5  // размер буфера
-#define PULSE_SENSE_WIDTH 4  // из множества {4, 5, 8, 10}
 #define current_tact_index ((is_odd_tact) ? 0 : 1)
 #define current_ctrl ctrls[current_tact_index]
 
@@ -38,8 +53,10 @@ struct {
 
 SpeedMode speed_mode;  // режим скорости
 bool is_odd_tact;      // такт измерений
-unsigned long checks_tact_counter; // счетчик такта проверки режимов
-unsigned long reads_tact_counter;  // счетчик для такта чтения входного PWM
+struct {
+  unsigned long speed_mode; // счетчик такта проверки режимов
+  unsigned long pwm_read;  // счетчик для такта чтения входного PWM
+} tack_counter = {0, 0};
 
 struct SignalController {
   byte pwm_in_pin;   // пин входящего PWM
@@ -51,6 +68,11 @@ struct SignalController {
   byte pulses_buffer[BUFFER_SIZE];  // буффер для вычисления FILTERED_PULSE
   int pulse_2duty[FAN_PERIOD + 1];  // кеш; соответствие PULSE->DUTY (пример: 0..40->0..1023)
   int min_duty;                     // минимальное значение DUTY; меньше этого значения PWM быть не может
+  struct {
+    int duty;     // импульс для пробуждения вентилятора
+    unsigned long counter;  // отчитывание тактов для пробуждения
+    unsigned long repeats;  // количество тактов для пробуждения
+  } wake_up;
   byte min_pulse;                   // минимальное значение PULSE; если входящий PWM меньше, то ему будет назначено MIN-DUTY
   byte pulse_2percent[FAN_PERIOD + 1]; // кеш; соответствие PULSE->DUTY_PERCENT (пример: 0..40->0..100)
   byte percent_2pulse[101];            // кеш; соответствие DUTY_PERCENT->PULSE (пример: 0..100->0..40)
@@ -68,6 +90,7 @@ SpeedMode read_speed_mode();
 void calculate_caches(byte ctrl_index);  // вычисление переменных для работы с DUTY и PULSE
 void refresh_caches(byte ctrl_index);
 byte update_pulse_in(byte ctrl_index);
+void set_min_values(byte ctrl_index, int min_duty, byte min_pulse);  // установить минимальные значения DUTY и PULSE
 SignalController init_controller(
     byte ctrl_index, byte pwm_in_pin, byte pwm_out_pin,
     byte duty_pin, byte pulse_pin,
@@ -87,7 +110,13 @@ void setup() {
 #endif
   );
   SignalController ctrl_2 = init_controller(
-      1, 3, 10, A1, A3,
+      1, 3,
+#ifdef USE_ONLY_ONE_OUTPUT
+      9,
+#else
+      10,
+#endif
+      A1, A3,
 #ifdef MANUAL_SETTINGS
       MIN_DUTY_2, MIN_PULSE_2
 #else
@@ -105,24 +134,35 @@ void setup() {
   pinMode(SPEED_PINS.speed_by_input_pin, INPUT_PULLUP);
 
   is_odd_tact = false;
-  checks_tact_counter = 0;
-  reads_tact_counter = 0;
 
   speed_mode = read_speed_mode();
 
-  refresh_caches(0);
-  refresh_caches(1);
+  calculate_caches(0);
+  calculate_caches(1);
 
   update_pulse_in(0);
   update_pulse_in(1);
+
+  for (int j = 0; j < 2; ++j) {
+    for (int i = 0; i < 100; ++i) {
+      Serial.print(i);
+      Serial.print("%>");
+      Serial.print(ctrls[j].percent_2pulse[i]);
+      if ((i + 1) % 10 == 0) {
+        Serial.println();
+      } else {
+        Serial.print("\t");
+      }
+    }
+  }
 }
 
 void loop() {
-  ++reads_tact_counter;
-  ++checks_tact_counter;
+  ++tack_counter.pwm_read;
+  ++tack_counter.speed_mode;
   is_odd_tact = !is_odd_tact;
-  if (checks_tact_counter >= 44986) {
-    checks_tact_counter = 0;
+  if (tack_counter.speed_mode >= 100019) {
+    tack_counter.speed_mode = 0;
     speed_mode = read_speed_mode();
   }
 
@@ -136,8 +176,8 @@ void loop() {
 #ifdef DEBUG_MODE_ON
     Serial.println("speed mode: input impulse");
 #endif
-    if (reads_tact_counter >= 70000) {  // счетное число значит нечетный такт; нужно для чередования контоллеров
-      reads_tact_counter = 0;
+    if (tack_counter.pwm_read >= 72547) {
+      tack_counter.pwm_read = 0;
       update_pulse_in_by_tact();
     }
     percent_1 = get_percent(ctrls[0]);
@@ -187,13 +227,19 @@ void loop() {
   apply_pwm_by_tact(percent_1, percent_2);
 }
 
+void set_min_values(byte ctrl_index, int min_duty, byte min_pulse) {
+  ctrls[ctrl_index].min_duty = min_duty;
+  ctrls[ctrl_index].wake_up.duty = map(WAKE_UP_PERCENT, 0, 100, min_duty, MAX_DUTY);
+  ctrls[ctrl_index].min_pulse = min_pulse;
+}
+
 void refresh_caches(byte ctrl_index) {
 #ifdef MANUAL_SETTINGS
   calculate_caches(ctrl_index);
 #else
-  int duty_pin_value = analogReadFast(ctrls[ctrl_index].duty_pin);
+  int duty_pin_value = analogRead(ctrls[ctrl_index].duty_pin);
   int min_duty = min(MAX_DUTY - 1, abs(duty_pin_value));
-  int pulse_pin_value = analogReadFast(ctrls[ctrl_index].pulse_pin);
+  int pulse_pin_value = analogRead(ctrls[ctrl_index].pulse_pin);
   byte min_pulse = min(
       FAN_PERIOD - 1,
       map(
@@ -213,8 +259,7 @@ void refresh_caches(byte ctrl_index) {
     Serial.print(")");
     Serial.println();
 
-    ctrls[ctrl_index].min_duty = min_duty;
-    ctrls[ctrl_index].min_pulse = min_pulse;
+    set_min_values(ctrl_index, min_duty, min_pulse);
     calculate_caches(ctrl_index);
   }
 #endif
@@ -291,7 +336,10 @@ SignalController init_controller(
   ctrls[ctrl_index].buffer_step = 0;
   ctrls[ctrl_index].filtered_pulse = FAN_PERIOD;
   ctrls[ctrl_index].pulse_2duty[FAN_PERIOD + 1];
-  
+  set_min_values(ctrl_index, min_duty, min_pulse);
+  ctrls[ctrl_index].wake_up.counter = 0;
+  ctrls[ctrl_index].wake_up.repeats = 0;
+
   for (byte i = 0; i < BUFFER_SIZE; ++i) {
     ctrls[ctrl_index].pulses_buffer[i] = FAN_PERIOD;
   }
@@ -308,13 +356,13 @@ SignalController init_controller(
 
 byte update_pulse_in(byte ctrl_index) {
   byte pulse;
-  if (digitalReadFast(ctrls[ctrl_index].pwm_in_pin) == LOW) {
+  if (digitalRead(ctrls[ctrl_index].pwm_in_pin) == LOW) {
     pulse = pulseIn(ctrls[ctrl_index].pwm_in_pin, HIGH, 100);
   } else {
     pulse = FAN_PERIOD - pulseIn(ctrls[ctrl_index].pwm_in_pin, LOW, 100);
   }
 
-  ctrls[ctrl_index].pulses_buffer[ctrls[ctrl_index].buffer_step] = pulse;
+  ctrls[ctrl_index].pulses_buffer[ctrls[ctrl_index].buffer_step] = min(pulse, FAN_PERIOD);
 
   if (++ctrls[ctrl_index].buffer_step >= BUFFER_SIZE) {
     ctrls[ctrl_index].buffer_step = 0;
@@ -322,12 +370,24 @@ byte update_pulse_in(byte ctrl_index) {
 
   // возможно, хватит и использования по трем значениям
   ctrls[ctrl_index].filtered_pulse = median_filter5(pulse, ctrls[ctrl_index].pulses_buffer);
+
+  return pulse;
 }
 
 void apply_pwm_by_tact(byte percent_1, byte percent_2) {
   int duty = get_duty_by_percent(current_ctrl, (is_odd_tact) ? percent_1 : percent_2);
+  if (current_ctrl.wake_up.counter > 1000003) {
+    duty = max(current_ctrl.wake_up.duty, duty);
+    ++current_ctrl.wake_up.repeats;
+    if (current_ctrl.wake_up.repeats > 10007) {
+      current_ctrl.wake_up.repeats = 0;
+      current_ctrl.wake_up.counter = 0;
+    }
+  } else {
+    ++current_ctrl.wake_up.counter;
+  }
   Timer1.pwm(current_ctrl.pwm_out_pin, duty);
-#ifdef DEBUG_MODE_ON
+#ifdef DEBUG_OUTPUT
   Serial.print("out_");
   Serial.print(current_tact_index);
   Serial.print(":\t");
@@ -341,7 +401,7 @@ void apply_pwm_by_tact(byte percent_1, byte percent_2) {
 
 byte update_pulse_in_by_tact() {
   byte pulse = update_pulse_in(current_tact_index);
-#ifdef DEBUG_MODE_ON
+#ifdef DEBUG_INPUT
   Serial.print("in_");
   Serial.print(current_tact_index);
   Serial.print(": ");
@@ -357,10 +417,10 @@ SpeedMode read_speed_mode() {
 #ifdef MIN_SPEED_ONLY
     return SpeedMode::MIN_ALWAYS;
 #else
-  if (digitalReadFast(SPEED_PINS.speed_by_input_pin) == LOW) {
+  if (digitalRead(SPEED_PINS.speed_by_input_pin) == LOW) {
     return SpeedMode::INPUT_IMPULSE;
   }
-  if (digitalReadFast(SPEED_PINS.min_speed_pin) == LOW) {
+  if (digitalRead(SPEED_PINS.min_speed_pin) == LOW) {
     return SpeedMode::MIN_ALWAYS;
   }
   return SpeedMode::MAX_ALWAYS;

@@ -267,59 +267,39 @@ void refresh_caches(byte ctrl_index) {
 
 void calculate_caches(byte ctrl_index) {
   // TODO: оптимизировать
-  int prev_percent = -1;
-  int min_percent = -1;
+  byte prev_percent = 0;
+  bool null_percent_setted = false;
   for (byte i = 0; i <= ctrls[ctrl_index].min_pulse; ++i) {
     ctrls[ctrl_index].pulse_2duty[i] = ctrls[ctrl_index].min_duty;
     ctrls[ctrl_index].pulse_2percent[i] = 0;
-    if (prev_percent != -1) {
-      prev_percent = 0;
-      min_percent = 0;
-    }
   }
-  ctrls[ctrl_index].percent_2pulse[0] = ctrls[ctrl_index].min_pulse;
   for (byte i = ctrls[ctrl_index].min_pulse + 1; i <= FAN_PERIOD; ++i) {
     byte pulse_multiplier = (i + PULSE_SENSE_WIDTH) / PULSE_SENSE_WIDTH;
     byte pulse_value = min(pulse_multiplier * PULSE_SENSE_WIDTH, FAN_PERIOD);
-    int duty = map(
+
+    ctrls[ctrl_index].pulse_2duty[i] = map(
         pulse_value,
         ctrls[ctrl_index].min_pulse, FAN_PERIOD,
         ctrls[ctrl_index].min_duty, MAX_DUTY);
+
     byte percent = map(
         pulse_value,
         ctrls[ctrl_index].min_pulse, FAN_PERIOD,
         0, 100);
-    if (prev_percent != -1) {
-      for (byte j = prev_percent + 1;
-            j <= percent;
-            ++j) {
-        ctrls[ctrl_index].percent_2pulse[j] = pulse_value;
-      }
-    }
-    ctrls[ctrl_index].pulse_2duty[i] = duty;
     ctrls[ctrl_index].pulse_2percent[i] = percent;
     if (prev_percent != percent) {
+      for (byte j = prev_percent + 1; j <= percent; ++j) {
+        ctrls[ctrl_index].percent_2pulse[j] = pulse_value;
+      }
       prev_percent = percent;
-    }
-    if ((min_percent == -1) && (i == ctrls[ctrl_index].min_pulse)) {
-      min_percent = percent;
-    }
-  }
-  if (min_percent != -1) {
-    for (byte j = 0; j <= min_percent; ++j) {
-      ctrls[ctrl_index].percent_2pulse[j] = ctrls[ctrl_index].min_pulse;
     }
   }
 
-  for (int i = 0; i < 100; ++i) {
-    Serial.print(i);
-    Serial.print("%>");
-    Serial.print(ctrls[ctrl_index].percent_2pulse[i]);
-    if ((i + 1) % 10 == 0) {
-      Serial.println();
-    } else {
-    Serial.print("\t");
-    }
+  for (int i = 0; i < ctrls[ctrl_index].pulse_2percent[ctrls[ctrl_index].min_pulse + 1]; ++i) {
+    ctrls[ctrl_index].percent_2pulse[i] = ctrls[ctrl_index].min_pulse;
+  }
+  for (int i = prev_percent + 1; i <= 100; ++i) {
+    ctrls[ctrl_index].percent_2pulse[i] = FAN_PERIOD;
   }
 }
 

@@ -1,408 +1,594 @@
-#include <TimerOne.h>  // для управления ШИМ; может выдавать ошибку в заивисимости WProgram.h
+#define TIME_CORRECTOR(func) ((func >> 8) * 10)
+#define micros() TIME_CORRECTOR(micros())
+#define millis() TIME_CORRECTOR(millis())
+#define fixed_delay(ms)                                                                                \
+  for (uint32_t _tmr_start = millis(), _timer = 0; abs(_timer) < ms; _timer = millis() - _tmr_start) { \
+  }
+
+#include <EEPROM.h>
+#include <GyverPWM.h>
+#include <mString.h>
+
+#define MU_RX_BUF 64
+#define MU_PRINT
+#include <MicroUART.h>
+MicroUART uart;
 
 #include "extra_functions.h"
 
-// #define DEBUG_MODE_ON
-// #define DEBUG_OUTPUT
-// #define DEBUG_INPUT
+// системные переменные, нельзя менять
+#define MAX_DUTY 254                       /*максимальное значение заполнения*/
+#define MIN_DUTY 1                         /*минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения*/
+#define PWM_RES 8                          /*битность PWM*/
+#define PULSE_WIDTH 40                     /*период сигнала в микросекундах*/
+#define PULSE_FREQ (1000000 / PULSE_WIDTH) /*частота сигнала*/
+#define BUFFER_SIZE 31                     /*размер буфера*/
+#define DEFAULT_MIN_PERCENT 30             /**/
+#define DEFAULT_MAX_PERCENT 65             /**/
+#define SERIAL_SPEED 115200
+#define REFRESH_TIMEOUT 3000
+#define VERSION_NUMBER 3
+#define INIT_ADDR 1023
+#define READ_PULSE_COMMAND "read_pulses"
+#define GET_MIN_PULSES_COMMAND "get_min_pulses"
+#define GET_MAX_PULSES_COMMAND "get_max_pulses"
+#define SAVE_PARAMS_COMMAND "save_params"
+#define SET_MAX_PULSE_COMMAND "set_max_pulse"
+#define SET_MIN_PULSE_COMMAND "set_min_pulse"
+#define RESET_MIN_DUTIES_COMMAND "reset_min_duties"
+#define SET_MIN_DUTY_COMMAND "set_min_duty"
+#define GET_MIN_DUTIES_COMMAND "get_min_duties"
+#define SWITCH_DEBUG_COMMAND "switch_debug"
 
-// #define USE_ONLY_ONE_OUTPUT // использовать только первый выход; второй не используется. Режим USE_MAX_PERCENT принудительно
-#define USE_MAX_PERCENT       // вычисленные сигналы сравниваются и выбирается максимальный на обе группы
-// #define USE_MAX_AND_AVERAGED  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
-// #define MIN_SPEED_ONLY  // минимальный сигнал заменяется на средний, сигналы отправляются на соответствующие группы
-#define WAKE_UP_PERCENT 75 // процент для выбора DUTY из диапазона[min_duty..MAX_DUTY]
-#define MANUAL_SETTINGS  // для работы необходимо задать значения MIN_PULSE и MIN_DUTY ниже
-#define MIN_PULSE_1  // 0..(FAN_PERIOD-1)
-#define MIN_PULSE_2  // 0..(FAN_PERIOD-1)
-#define MIN_DUTY_1   // 0..(MAX_DUTY-1)
-#define MIN_DUTY_2   // 0..(MAX_DUTY-1)
-#define PULSE_SENSE_WIDTH 4  // из множества {4, 5, 8, 10}
+// TODO добавить термометр как дополнительный источник инфы
 
+#define INPUTS_COUNT 3 /*количество ШИМ входов*/
+#define INPUTS_INFO \
+  { A1, A2, A3 } /*пины входящих ШИМ*/
 
-#ifdef USE_ONLY_ONE_OUTPUT
-  #define USE_MAX_PERCENT
-  #ifdef MIN_DUTY_1
-    #define MIN_DUTY_2 MIN_DUTY_1
-  #endif
-#endif
-#ifdef USE_MAX_PERCENT
-  #undef USE_MAX_AND_AVERAGED
-#endif
-#ifdef DEBUG_MODE_ON
-  #define DEBUG_OUTPUT
-  #define DEBUG_INPUT
-#endif
+#define OUTPUTS_COUNT 4 /*количество ШИМ выходов*/
+// [параметр][номер выхода]. параметры: pwm_pin, rpm_pin
+#define OUTPUTS_INFO               \
+  {                                \
+    {3, 9, 10, 5}, { 2, 11, 6, 4 } \
+  }
 
-enum SpeedMode {  // тип выбора значения PWM
-  INPUT_IMPULSE,  // на основе входных PWM
-  MAX_ALWAYS,     // максимально значение выходного PWM; входные сигналы не используются
-  MIN_ALWAYS,     // минимально значение выходного PWM; входные сигналы не используются
+#define COOLING_PIN A0
+#define RESET_DUTY_CACHE_PIN 7
+
+bool cooling_on;   // режим максимальной скорости
+uint32_t pwm_tmr;  // таймер чтения ШИМ
+uint32_t tmr_100;  // таймер раз в 100мс
+byte reset_counter;
+mString<64> input_data;
+boolean recieved_flag;
+boolean is_debug;
+
+struct InputParams {
+  byte pwm_pin;  // пин входящего ШИМ сигнала
+  byte pulse;    // текущий PWM
 };
 
-#define MAX_DUTY 1023  // максимальное значение заполнения
-#define FAN_PERIOD 40  // период сигнала в микросекундах
-#define BUFFER_SIZE 5  // размер буфера
-#define current_tact_index ((is_odd_tact) ? 0 : 1)
-#define current_ctrl ctrls[current_tact_index]
+struct OutputParams {
+  byte pwm_pin;                   // пин выходного ШИМ сигнала
+  byte rpm_pin;                   // пин тахометра
+  byte percent_2duty_cache[101];  // кеш преобразования процента в скважность
+};
 
-// пины режима скорости
-struct {
-  byte speed_by_input_pin;
-  byte min_speed_pin;
-} SPEED_PINS = {4, 5};
-
-SpeedMode speed_mode;  // режим скорости
-bool is_odd_tact;      // такт измерений
-struct {
-  unsigned long speed_mode; // счетчик такта проверки режимов
-  unsigned long pwm_read;  // счетчик для такта чтения входного PWM
-} tack_counter = {0, 0};
-
-struct SignalController {
-  byte pwm_in_pin;   // пин входящего PWM
-  byte pwm_out_pin;  // пин выходящего PWM
-  byte duty_pin;     // пин настройки минимального значения DUTY через энкодер
-  byte pulse_pin;    // пин настройки минимального значения PULSE через энкодер
-  byte buffer_step;  // шаг в буффере; буфер записывается циклически
-  byte filtered_pulse;  // среднее значение PULSE, вычисленное по медиане
-  byte pulses_buffer[BUFFER_SIZE];  // буффер для вычисления FILTERED_PULSE
-  int pulse_2duty[FAN_PERIOD + 1];  // кеш; соответствие PULSE->DUTY (пример: 0..40->0..1023)
-  int min_duty;                     // минимальное значение DUTY; меньше этого значения PWM быть не может
-  struct {
-    int duty;     // импульс для пробуждения вентилятора
-    unsigned long counter;  // отчитывание тактов для пробуждения
-    unsigned long repeats;  // количество тактов для пробуждения
-  } wake_up;
-  byte min_pulse;                   // минимальное значение PULSE; если входящий PWM меньше, то ему будет назначено MIN-DUTY
-  byte pulse_2percent[FAN_PERIOD + 1]; // кеш; соответствие PULSE->DUTY_PERCENT (пример: 0..40->0..100)
-  byte percent_2pulse[101];            // кеш; соответствие DUTY_PERCENT->PULSE (пример: 0..100->0..40)
+struct Settings {
+  byte min_duties[OUTPUTS_COUNT];
+  byte min_pulses[INPUTS_COUNT];
+  byte max_pulses[INPUTS_COUNT];
 };
 
 // информация о сигналах
-SignalController ctrls[2];
+InputParams inputs[INPUTS_COUNT];
+OutputParams outputs[OUTPUTS_COUNT];
 
-#define get_percent(controller) controller.pulse_2percent[controller.filtered_pulse]
-#define get_duty_by_percent(controller, percent) controller.pulse_2duty[controller.percent_2pulse[percent]]
-void apply_pwm_by_tact(byte percent_1, byte percent_2);
-byte update_pulse_in_by_tact();
+Settings settings;
 
-SpeedMode read_speed_mode();
-void calculate_caches(byte ctrl_index);  // вычисление переменных для работы с DUTY и PULSE
-void refresh_caches(byte ctrl_index);
-byte update_pulse_in(byte ctrl_index);
-void set_min_values(byte ctrl_index, int min_duty, byte min_pulse);  // установить минимальные значения DUTY и PULSE
-SignalController init_controller(
-    byte ctrl_index, byte pwm_in_pin, byte pwm_out_pin,
-    byte duty_pin, byte pulse_pin,
-    int min_duty, byte min_pulse
-);
+void init_input_params();
+void init_output_params(bool is_first, bool init_rpm);
+byte get_max_percent_by_pwm();
+byte stop_fans(byte ignored_bits, bool wait_stop);
+boolean has_rpm(byte index);
+boolean has_rpm(byte index, byte more_than_rpm);
+
+#define add_chars_to_mstring(str, chars)                 \
+  for (byte __i__ = 0; __i__ < strlen(chars); ++__i__) { \
+    str.add(chars[__i__]);                               \
+  }
+#define convert_percent_2pulse(percent) map(percent, 0, 100, 0, PULSE_WIDTH)
+#define convert_by_sqrt(x, min_x, max_x, min_y, max_y) map(sqrt(map(constrain(x, min_x, max_x), min_x, max_x, 0, 900)), 0, 30, min_y, max_y)
+
+#define apply_fan_pwm(index, duty)       \
+  PWM_set(outputs[index].pwm_pin, duty); \
+  if (is_debug) {                        \
+    uart.print("Fan ");                  \
+    uart.print(outputs[index].pwm_pin);  \
+    uart.print(", duty ");               \
+    uart.println(duty);                  \
+  }
+#define apply_pwm_4all(percent)                                \
+  uart.print("pwm percent:");                                  \
+  uart.println(percent);                                       \
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {                   \
+    apply_fan_pwm(i, outputs[i].percent_2duty_cache[percent]); \
+  }
+
+void MU_serialEvent() {
+}
 
 void setup() {
-  Timer1.initialize(FAN_PERIOD);  // частота ШИМ ~25 кГц
-  Serial.begin(9600);
+  uart.begin(SERIAL_SPEED);
+  uart.println("start");
 
-  SignalController ctrl_1 = init_controller(
-      0, 2, 9, A0, A2,
-#ifdef MANUAL_SETTINGS
-      MIN_DUTY_1, MIN_PULSE_1
-#else
-      MAX_DUTY - 1, FAN_PERIOD - 1
-#endif
-  );
-  SignalController ctrl_2 = init_controller(
-      1, 3,
-#ifdef USE_ONLY_ONE_OUTPUT
-      9,
-#else
-      10,
-#endif
-      A1, A3,
-#ifdef MANUAL_SETTINGS
-      MIN_DUTY_2, MIN_PULSE_2
-#else
-      MAX_DUTY - 1, FAN_PERIOD - 1
-#endif
-  );
+  pinMode(COOLING_PIN, INPUT_PULLUP);
+  pinMode(RESET_DUTY_CACHE_PIN, INPUT_PULLUP);
 
-  pinMode(ctrl_1.duty_pin, INPUT);
-  pinMode(ctrl_2.duty_pin, INPUT);
-  pinMode(ctrl_1.pwm_in_pin, INPUT);
-  pinMode(ctrl_2.pwm_in_pin, INPUT);
-  pinMode(ctrl_1.pwm_out_pin, OUTPUT);
-  pinMode(ctrl_2.pwm_out_pin, OUTPUT);
-  pinMode(SPEED_PINS.min_speed_pin, INPUT_PULLUP);
-  pinMode(SPEED_PINS.speed_by_input_pin, INPUT_PULLUP);
+  cooling_on = false;  // не режим продувки
+  pwm_tmr = 0;         // обнуляем таймер
+  tmr_100 = 0;
+  reset_counter = 0;
+  input_data = "";
+  is_debug = false;
 
-  is_odd_tact = false;
-
-  speed_mode = read_speed_mode();
-
-  calculate_caches(0);
-  calculate_caches(1);
-
-  update_pulse_in(0);
-  update_pulse_in(1);
-
-  for (int j = 0; j < 2; ++j) {
-    for (int i = 0; i < 100; ++i) {
-      Serial.print(i);
-      Serial.print("%>");
-      Serial.print(ctrls[j].percent_2pulse[i]);
-      if ((i + 1) % 10 == 0) {
-        Serial.println();
-      } else {
-        Serial.print("\t");
-      }
+  if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
+    for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+      settings.min_duties[i] = MAX_DUTY;
     }
+    for (byte i = 0; i < INPUTS_COUNT; ++i) {
+      settings.min_pulses[i] = convert_percent_2pulse(DEFAULT_MIN_PERCENT);
+      settings.max_pulses[i] = convert_percent_2pulse(DEFAULT_MAX_PERCENT);
+    }
+    init_output_params(true, true);
+    EEPROM.put(0, settings);
+    EEPROM.write(INIT_ADDR, VERSION_NUMBER);
+  } else {
+    EEPROM.get(0, settings);
+    init_output_params(true, false);
   }
+  init_input_params();
 }
 
 void loop() {
-  ++tack_counter.pwm_read;
-  ++tack_counter.speed_mode;
-  is_odd_tact = !is_odd_tact;
-  if (tack_counter.speed_mode >= 100019) {
-    tack_counter.speed_mode = 0;
-    speed_mode = read_speed_mode();
+  while (uart.available() > 0) {
+    input_data.add((char)uart.read());
+    recieved_flag = true;
+    fixed_delay(20);
   }
-
-#ifndef MANUAL_SETTINGS
-  refresh_caches(current_tact_index);
-#endif
-
-  byte percent_1;
-  byte percent_2;
-  if (speed_mode == SpeedMode::INPUT_IMPULSE) {
-#ifdef DEBUG_MODE_ON
-    Serial.println("speed mode: input impulse");
-#endif
-    if (tack_counter.pwm_read >= 72547) {
-      tack_counter.pwm_read = 0;
-      update_pulse_in_by_tact();
-    }
-    percent_1 = get_percent(ctrls[0]);
-    percent_2 = get_percent(ctrls[1]);
-#ifdef USE_MAX_PERCENT
-    if (percent_1 > percent_2) {
-      percent_2 = percent_1;
-    } else {
-      percent_1 = percent_2;
-    }
-  #ifdef DEBUG_MODE_ON
-    Serial.print("mutation mode: MAX_PERCENT (pulse ");
-    Serial.print(percent_1);
-    Serial.println("%)");
-  #endif
-#elif defined(USE_MAX_AND_AVERAGED)
-  #ifdef DEBUG_MODE_ON
-    Serial.print("mutation mode: avaraged (");
-    Serial.print(percent_1);
-    Serial.print("%\t");
-    Serial.print(percent_2);
-    Serial.print("%)\t->\t(");
-  #endif
-    if (percent_1 > percent_2) {
-      percent_2 = (percent_1 + percent_2) / 2;
-    } else {
-      percent_1 = (percent_1 + percent_2) / 2;
-    }
-  #ifdef DEBUG_MODE_ON
-    Serial.print(percent_1);
-    Serial.print("%\t");
-    Serial.print(percent_2);
-    Serial.println("%)");
-  #endif
-#else
-    Serial.println("mutation mode: ERROR, immutable");
-#endif
-  } else {
-#ifdef DEBUG_MODE_ON
-    Serial.print("speed mode: ");
-    Serial.println((speed_mode == SpeedMode::MAX_ALWAYS) ? "MAX_SPEED" : "MIN_SPEED");
-#endif
-    percent_1 = (speed_mode == SpeedMode::MAX_ALWAYS) ? 100 : 0;
-    percent_2 = percent_1;
-  }
-
-  apply_pwm_by_tact(percent_1, percent_2);
-}
-
-void set_min_values(byte ctrl_index, int min_duty, byte min_pulse) {
-  ctrls[ctrl_index].min_duty = min_duty;
-  ctrls[ctrl_index].wake_up.duty = map(WAKE_UP_PERCENT, 0, 100, min_duty, MAX_DUTY);
-  ctrls[ctrl_index].min_pulse = min_pulse;
-}
-
-void refresh_caches(byte ctrl_index) {
-#ifdef MANUAL_SETTINGS
-  calculate_caches(ctrl_index);
-#else
-  int duty_pin_value = analogRead(ctrls[ctrl_index].duty_pin);
-  int min_duty = min(MAX_DUTY - 1, abs(duty_pin_value));
-  int pulse_pin_value = analogRead(ctrls[ctrl_index].pulse_pin);
-  byte min_pulse = min(
-      FAN_PERIOD - 1,
-      map(
-          min(MAX_DUTY, abs(pulse_pin_value)),
-          0, MAX_DUTY,
-          0, FAN_PERIOD));
-  if ((abs(min_duty - ctrls[ctrl_index].min_duty) > 15) || (abs(min_pulse - ctrls[ctrl_index].min_pulse) > 1)) {
-    Serial.print(ctrls[ctrl_index].pulse_pin);
-    Serial.print(": pulse ");
-    Serial.print(min_pulse);
-    Serial.print("(");
-    Serial.print(ctrls[ctrl_index].min_pulse);
-    Serial.print("), duty ");
-    Serial.print(min_duty);
-    Serial.print("(");
-    Serial.print(ctrls[ctrl_index].min_duty);
-    Serial.print(")");
-    Serial.println();
-
-    set_min_values(ctrl_index, min_duty, min_pulse);
-    calculate_caches(ctrl_index);
-  }
-#endif
-}
-
-void calculate_caches(byte ctrl_index) {
-  // TODO: оптимизировать
-  byte prev_percent = 0;
-  bool null_percent_setted = false;
-  for (byte i = 0; i <= ctrls[ctrl_index].min_pulse; ++i) {
-    ctrls[ctrl_index].pulse_2duty[i] = ctrls[ctrl_index].min_duty;
-    ctrls[ctrl_index].pulse_2percent[i] = 0;
-  }
-  for (byte i = ctrls[ctrl_index].min_pulse + 1; i <= FAN_PERIOD; ++i) {
-    byte pulse_multiplier = (i + PULSE_SENSE_WIDTH) / PULSE_SENSE_WIDTH;
-    byte pulse_value = min(pulse_multiplier * PULSE_SENSE_WIDTH, FAN_PERIOD);
-
-    ctrls[ctrl_index].pulse_2duty[i] = map(
-        pulse_value,
-        ctrls[ctrl_index].min_pulse, FAN_PERIOD,
-        ctrls[ctrl_index].min_duty, MAX_DUTY);
-
-    byte percent = map(
-        pulse_value,
-        ctrls[ctrl_index].min_pulse, FAN_PERIOD,
-        0, 100);
-    ctrls[ctrl_index].pulse_2percent[i] = percent;
-    if (prev_percent != percent) {
-      for (byte j = prev_percent + 1; j <= percent; ++j) {
-        ctrls[ctrl_index].percent_2pulse[j] = pulse_value;
+  if (recieved_flag) {
+    if (input_data.startsWith(READ_PULSE_COMMAND)) {
+      uart.print(READ_PULSE_COMMAND);
+      uart.println(": ");
+      for (byte i = 0; i < INPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(inputs[i].pulse);
       }
-      prev_percent = percent;
+    } else if (input_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
+      uart.print(GET_MIN_DUTIES_COMMAND);
+      uart.println(": ");
+      for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(settings.min_duties[i]);
+      }
+    } else if (input_data.startsWith(SAVE_PARAMS_COMMAND)) {
+      uart.print(SAVE_PARAMS_COMMAND);
+      uart.print(": complete");
+      EEPROM.put(0, settings);
+    } else if (input_data.startsWith(RESET_MIN_DUTIES_COMMAND)) {
+      init_output_params(false, true);
+    } else if (input_data.startsWith(SWITCH_DEBUG_COMMAND)) {
+      is_debug = !is_debug;
+      uart.print("Debug mode ");
+      uart.println((is_debug) ? "ON" : "OFF");
+    } else if (input_data.startsWith(GET_MIN_PULSES_COMMAND) || input_data.startsWith(GET_MAX_PULSES_COMMAND)) {
+      bool is_min_pulse = input_data.startsWith(GET_MIN_PULSES_COMMAND);
+      uart.print(input_data.buf);
+      uart.println(": ");
+      for (byte i = 0; i < INPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(((is_min_pulse) ? settings.min_pulses : settings.max_pulses)[i]);
+      }
+    } else if (input_data.startsWith(SET_MIN_DUTY_COMMAND)) {
+      uart.print(SET_MIN_DUTY_COMMAND);
+      uart.println(": ");
+      bool complete = false;
+      char* params[3];
+      byte split_count = input_data.split(params, ' ');
+      byte output_index;
+      byte duty_value;
+      if (split_count >= 3) {
+        mString<3> param;
+        add_chars_to_mstring(param, params[1]);
+        output_index = param.toInt();
+        param.clear();
+        add_chars_to_mstring(param, params[2]);
+        duty_value = param.toInt();
+        if ((output_index < OUTPUTS_COUNT) && (MIN_DUTY <= duty_value) && (duty_value <= MAX_DUTY)) {
+          settings.min_duties[output_index] = duty_value;
+          complete = true;
+          init_output_params(false, false);
+
+          uart.print("Output ");
+          uart.print(output_index);
+          uart.print(" value ");
+          uart.println(duty_value);
+        }
+      }
+      if (!complete) {
+        uart.println("error");
+      }
+    } else if (input_data.startsWith(SET_MAX_PULSE_COMMAND) || (input_data.startsWith(SET_MIN_PULSE_COMMAND))) {
+      bool is_max_pulse = input_data.startsWith(SET_MAX_PULSE_COMMAND);
+      uart.print(input_data.buf);
+      uart.println(": ");
+      bool complete = false;
+      char* params[3];
+      byte split_count = input_data.split(params, ' ');
+      byte input_index;
+      byte pulse_value;
+      if (split_count >= 3) {
+        mString<3> param;
+        add_chars_to_mstring(param, params[1]);
+        input_index = param.toInt();
+        param.clear();
+        add_chars_to_mstring(param, params[2]);
+        pulse_value = param.toInt();
+        if (input_index < INPUTS_COUNT) {
+          if (is_max_pulse) {
+            if ((settings.min_pulses[input_index] < pulse_value) && (pulse_value <= PULSE_WIDTH)) {
+              settings.max_pulses[input_index] = pulse_value;
+              complete = true;
+            }
+          } else {
+            if ((0 <= pulse_value) && (pulse_value < settings.max_pulses[input_index])) {
+              settings.min_pulses[input_index] = pulse_value;
+              complete = true;
+            }
+          }
+        }
+      }
+      if (complete) {
+        uart.print("Input ");
+        uart.print(input_index);
+        uart.print(" value ");
+        uart.println(pulse_value);
+      } else {
+        uart.println("error");
+      }
+    } else {
+      uart.print("Unexpected command: ");
+      uart.println(input_data.buf);
+    }
+
+    input_data.clear();
+    recieved_flag = false;
+  }
+
+  uint32_t time = millis();
+  if (abs(time - tmr_100) >= 1000) {
+    tmr_100 = time;
+
+    if ((reset_counter != 0) && digitalReadFast(RESET_DUTY_CACHE_PIN) == HIGH) {
+      reset_counter = 0;
+    }
+  } else {
+    if (digitalReadFast(RESET_DUTY_CACHE_PIN) == LOW) {
+      if (reset_counter == 255) {
+        init_output_params(false, true);
+      } else {
+        ++reset_counter;
+      }
     }
   }
 
-  for (int i = 0; i < ctrls[ctrl_index].pulse_2percent[ctrls[ctrl_index].min_pulse + 1]; ++i) {
-    ctrls[ctrl_index].percent_2pulse[i] = ctrls[ctrl_index].min_pulse;
-  }
-  for (int i = prev_percent + 1; i <= 100; ++i) {
-    ctrls[ctrl_index].percent_2pulse[i] = FAN_PERIOD;
-  }
-}
-
-SignalController init_controller(
-    byte ctrl_index,
-    byte pwm_in_pin, byte pwm_out_pin,
-    byte duty_pin, byte pulse_pin,
-    int min_duty, byte min_pulse
-) {
-  ctrls[ctrl_index].pwm_in_pin = pwm_in_pin;
-  ctrls[ctrl_index].pwm_out_pin = pwm_out_pin;
-  ctrls[ctrl_index].duty_pin = duty_pin;
-  ctrls[ctrl_index].pulse_pin = pulse_pin;
-  ctrls[ctrl_index].buffer_step = 0;
-  ctrls[ctrl_index].filtered_pulse = FAN_PERIOD;
-  ctrls[ctrl_index].pulse_2duty[FAN_PERIOD + 1];
-  set_min_values(ctrl_index, min_duty, min_pulse);
-  ctrls[ctrl_index].wake_up.counter = 0;
-  ctrls[ctrl_index].wake_up.repeats = 0;
-
-  for (byte i = 0; i < BUFFER_SIZE; ++i) {
-    ctrls[ctrl_index].pulses_buffer[i] = FAN_PERIOD;
-  }
-  for (byte i = 0; i <= FAN_PERIOD; ++i) {
-    ctrls[ctrl_index].pulse_2percent[i] = 100;
-    ctrls[ctrl_index].pulse_2duty[i] = MAX_DUTY;
-  }
-  for (byte i = 0; i <= 100; ++i) {
-    ctrls[ctrl_index].percent_2pulse[i] = FAN_PERIOD;
-  }
-
-  return ctrls[ctrl_index];
-}
-
-byte update_pulse_in(byte ctrl_index) {
-  byte pulse;
-  if (digitalRead(ctrls[ctrl_index].pwm_in_pin) == LOW) {
-    pulse = pulseIn(ctrls[ctrl_index].pwm_in_pin, HIGH, 100);
-  } else {
-    pulse = FAN_PERIOD - pulseIn(ctrls[ctrl_index].pwm_in_pin, LOW, 100);
-  }
-
-  ctrls[ctrl_index].pulses_buffer[ctrls[ctrl_index].buffer_step] = min(pulse, FAN_PERIOD);
-
-  if (++ctrls[ctrl_index].buffer_step >= BUFFER_SIZE) {
-    ctrls[ctrl_index].buffer_step = 0;
-  }
-
-  // возможно, хватит и использования по трем значениям
-  ctrls[ctrl_index].filtered_pulse = median_filter5(pulse, ctrls[ctrl_index].pulses_buffer);
-
-  return pulse;
-}
-
-void apply_pwm_by_tact(byte percent_1, byte percent_2) {
-  int duty = get_duty_by_percent(current_ctrl, (is_odd_tact) ? percent_1 : percent_2);
-  if (current_ctrl.wake_up.counter > 1000003) {
-    duty = max(current_ctrl.wake_up.duty, duty);
-    ++current_ctrl.wake_up.repeats;
-    if (current_ctrl.wake_up.repeats > 10007) {
-      current_ctrl.wake_up.repeats = 0;
-      current_ctrl.wake_up.counter = 0;
+  if (cooling_on) {
+    if (digitalRead(COOLING_PIN) == LOW) {
+      cooling_on = false;
+      uart.println("cooling OFF");
     }
+  } else if (digitalRead(COOLING_PIN) == HIGH) {
+    cooling_on = true;
+    apply_pwm_4all(100);
+    uart.println("cooling ON");
+  } else if (abs(time - pwm_tmr) >= REFRESH_TIMEOUT) {
+    pwm_tmr = time;
+    byte max_percent_by_pwm = get_max_percent_by_pwm();
+    byte percent = max(max_percent_by_pwm, 0);
+
+    apply_pwm_4all(percent);
+  }
+}
+
+void init_input_params() {
+  byte inputs_info[INPUTS_COUNT] = INPUTS_INFO;
+  for (byte i = 0; i < INPUTS_COUNT; ++i) {
+    inputs[i].pwm_pin = inputs_info[i];
+
+    pinMode(inputs[i].pwm_pin, INPUT);
+
+    inputs[i].pulse = 0;
+  }
+}
+
+boolean has_rpm(byte index, byte more_than_rpm) {
+  uart.print("fan ");
+  uart.print(outputs[index].pwm_pin);
+
+  unsigned long rpm = pulseIn(outputs[index].rpm_pin, HIGH, 500000);
+  if (rpm == 0) {
+    rpm = pulseIn(outputs[index].rpm_pin, LOW, 1500000);
+    if (rpm == 0) {
+      rpm = (digitalReadFast(outputs[index].rpm_pin) == LOW) ? 1 : 0;
+    }
+  }
+
+  uart.print(" ");
+  uart.println(rpm);
+
+  return rpm > more_than_rpm;
+}
+
+boolean has_rpm(byte index) {
+  return has_rpm(index, 0);
+}
+
+#define print_bits(bits, size)                                    \
+  for (byte __counter__ = 0; __counter__ < size; ++__counter__) { \
+    uart.print((bitRead(bits, __counter__)) ? 1 : 0);             \
+  }
+
+/**
+ *  останавливает вентиляторы, за исключением указанных в ignored_bits
+ *  возвращает в битах неостановленные вентиляторы за исключением игнорируемых
+ */
+byte stop_fans(byte ignored_bits, bool wait_stop) {
+  byte running_bits = 0;
+  byte complete_bits = 0;
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+    if (bitRead(ignored_bits, i)) {
+      bitSet(complete_bits, i);
+    } else {
+      bitSet(running_bits, i);
+      apply_fan_pwm(i, MIN_DUTY);
+    }
+  }
+
+  byte _i = 0;
+  byte max_count_index = 20;
+  for (; ((running_bits | ignored_bits) != complete_bits) && (_i < max_count_index || wait_stop); ++_i) {
+    uart.print("stop fans, ");
+    uart.print(_i);
+    uart.print(": ");
+    print_bits(running_bits, OUTPUTS_COUNT);
+    uart.print(", ");
+    print_bits(ignored_bits, OUTPUTS_COUNT);
+    uart.print(", ");
+    print_bits(complete_bits, OUTPUTS_COUNT);
+    uart.println();
+    if (!wait_stop) {
+      fixed_delay(500);
+    }
+    for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+      if (bitRead(running_bits, i) && !bitRead(ignored_bits, i)) {
+        if (!has_rpm(i)) {
+          bitClear(running_bits, i);
+        }
+      }
+    }
+  }
+
+  if (wait_stop || _i < max_count_index) {
+    uart.print("stopped ");
   } else {
-    ++current_ctrl.wake_up.counter;
+    uart.print("not stopped ");
   }
-  Timer1.pwm(current_ctrl.pwm_out_pin, duty);
-#ifdef DEBUG_OUTPUT
-  Serial.print("out_");
-  Serial.print(current_tact_index);
-  Serial.print(":\t");
-  Serial.print(duty);
-  Serial.print("(");
-  Serial.print((is_odd_tact) ? percent_1 : percent_2);
-  Serial.print("%)");
-  Serial.println();
-#endif
+
+  print_bits(running_bits, OUTPUTS_COUNT);
+  uart.print(", ");
+  print_bits(ignored_bits, OUTPUTS_COUNT);
+  uart.print(", ");
+  print_bits(complete_bits, OUTPUTS_COUNT);
+  uart.println();
+  uart.println();
+
+  return running_bits;
 }
 
-byte update_pulse_in_by_tact() {
-  byte pulse = update_pulse_in(current_tact_index);
-#ifdef DEBUG_INPUT
-  Serial.print("in_");
-  Serial.print(current_tact_index);
-  Serial.print(": ");
-  Serial.print(pulse);
-  Serial.print(" (");
-  Serial.print(current_ctrl.filtered_pulse);
-  Serial.println(")");
-#endif
-  return pulse;
+void init_output_params(bool is_first, bool init_rpm) {
+  if (is_first) {
+    byte outputs_info[][OUTPUTS_COUNT] = OUTPUTS_INFO;
+    for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+      outputs[i].pwm_pin = outputs_info[0][i];
+      outputs[i].rpm_pin = outputs_info[1][i];
+
+      pinMode(outputs[i].pwm_pin, OUTPUT);
+      pinMode(outputs[i].rpm_pin, INPUT_PULLUP);
+
+      PWM_frequency(outputs[i].pwm_pin, PULSE_FREQ, FAST_PWM);
+    }
+  }
+
+  if (init_rpm) {
+    byte start_duties[OUTPUTS_COUNT];
+    // не будем искать минимальную скорость, если вентилятор не остановился или игнорируется
+    byte ignored_bits = stop_fans(ignored_bits, false);
+    for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+      if (!bitRead(ignored_bits, i)) {
+        // если остановился, то пробуем запустить
+        apply_fan_pwm(i, MAX_DUTY);
+      }
+    }
+    fixed_delay(3000);
+    for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+      if (!bitRead(ignored_bits, i) && !has_rpm(i)) {
+        // если не запустился, то игнорируем его детальную настройку из-за отсутствия обратной связи
+        bitSet(ignored_bits, i);
+        settings.min_duties[i] = MIN_DUTY;
+        uart.print("fan ");
+        uart.print(outputs[i].pwm_pin);
+        uart.println(" without RPM");
+      } else {
+        settings.min_duties[i] = MAX_DUTY;
+        start_duties[i] = MIN_DUTY;
+      }
+    }
+
+    byte complete_bits = (1 << OUTPUTS_COUNT) - 1;
+    if (ignored_bits != complete_bits) {
+      for (byte _i = 0; _i < 7; ++_i) {
+        stop_fans(ignored_bits, true);
+        byte middle_duties[OUTPUTS_COUNT];
+        for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+          if (!bitRead(ignored_bits, i)) {
+            middle_duties[i] = ((settings.min_duties[i] - start_duties[i]) >> 1) + 1 + start_duties[i];
+            apply_fan_pwm(i, middle_duties[i]);
+          }
+        }
+        fixed_delay(700);
+        for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+          if (!bitRead(ignored_bits, i)) {
+            uart.print("fan ");
+            uart.print(outputs[i].pwm_pin);
+            uart.print(" binary search min duty [");
+            uart.print(start_duties[i]);
+            uart.print(", ");
+            uart.print(settings.min_duties[i]);
+            uart.println("]");
+            if ((has_rpm(i))) {
+              settings.min_duties[i] = middle_duties[i];
+            } else {
+              start_duties[i] = middle_duties[i];
+            }
+          }
+        }
+      }
+      stop_fans(ignored_bits, true);
+
+      byte ready_bits = ignored_bits;
+      for (byte _i = 0; _i < MAX_DUTY && (ready_bits != complete_bits); ++_i) {
+        uart.print(_i);
+        uart.print(", search step-by-step min duty ");
+        print_bits(ready_bits, OUTPUTS_COUNT);
+        uart.print(" != ");
+        print_bits(complete_bits, OUTPUTS_COUNT);
+        uart.println();
+
+        for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+          if (!bitRead(ready_bits, i)) {
+            apply_fan_pwm(i, settings.min_duties[i]);
+            if (settings.min_duties[i] == MAX_DUTY) {
+              bitSet(ready_bits, i);
+            }
+          }
+        }
+        fixed_delay(500);
+        byte pre_ready_bits = ready_bits;
+        for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+          if (!bitRead(pre_ready_bits, i) && has_rpm(i)) {
+            bitSet(pre_ready_bits, i);
+          }
+        }
+        byte changed_bits = pre_ready_bits ^ ready_bits;
+        if (changed_bits != 0) {
+          stop_fans(changed_bits, true);
+          fixed_delay(3000);
+          for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+            if (bitRead(changed_bits, i)) {
+              apply_fan_pwm(i, settings.min_duties[i]);
+            }
+          }
+          fixed_delay(3000);
+          for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+            if (bitRead(changed_bits, i) && has_rpm(i, 50)) {
+              bitSet(ready_bits, i);
+              uart.print("fan ");
+              uart.print(outputs[i].pwm_pin);
+              uart.print(" min duty ");
+              uart.println(settings.min_duties[i]);
+            }
+          }
+        }
+        for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+          if (!bitRead(ready_bits, i)) {
+            settings.min_duties[i] += ((settings.min_duties[i] == MAX_DUTY - 2)) ? 1 : 2;
+          }
+        }
+      }
+    }
+  }
+
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+    for (byte p = 0; p <= 100; ++p) {
+      outputs[i].percent_2duty_cache[p] = convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY);
+    }
+  }
+
+  uart.println("Outputs created");
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+    uart.print("values for ");
+    uart.print(outputs[i].pwm_pin);
+    uart.println(":");
+    for (byte p = 0, j = 0; p <= 100; ++p, ++j) {
+      if (j == 10) {
+        j = 0;
+        uart.println();
+      }
+      uart.print(p);
+      uart.print("% ");
+      uart.print(outputs[i].percent_2duty_cache[p]);
+      uart.print("\t");
+    }
+    uart.println();
+  }
 }
 
-SpeedMode read_speed_mode() {
-#ifdef MIN_SPEED_ONLY
-    return SpeedMode::MIN_ALWAYS;
-#else
-  if (digitalRead(SPEED_PINS.speed_by_input_pin) == LOW) {
-    return SpeedMode::INPUT_IMPULSE;
+byte get_max_percent_by_pwm() {
+  byte buffer[BUFFER_SIZE];
+  byte last_buffer_index = BUFFER_SIZE - 1;
+  byte percent = 0;
+  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
+    for (byte i = 0; i < last_buffer_index; ++i) {
+      buffer[i] = pulseIn(inputs[input_index].pwm_pin, HIGH, (PULSE_WIDTH << 1));
+      if ((buffer[i] == 0) && (digitalReadFast(inputs[input_index].pwm_pin) == HIGH)) {
+        buffer[i] = PULSE_WIDTH;
+      } else {
+        buffer[i] = constrain(buffer[i], 0, PULSE_WIDTH);
+      }
+    }
+    buffer[last_buffer_index] = inputs[input_index].pulse;
+    inputs[input_index].pulse = find_median(buffer, BUFFER_SIZE);
+
+    byte pulse = constrain(inputs[input_index].pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
+    byte pulse_2percent = map(
+        pulse,
+        settings.min_pulses[input_index], settings.max_pulses[input_index],
+        0, 100);
+    percent = max(percent, pulse_2percent);
+
+    if (is_debug) {
+      uart.print("input ");
+      uart.print(inputs[input_index].pwm_pin);
+      uart.print(": ");
+      uart.print(inputs[input_index].pulse);
+      uart.print("(");
+      uart.print(pulse);
+      uart.print(", ");
+      uart.print(pulse_2percent);
+      uart.print("%), from [");
+      for (byte i = 0; i < BUFFER_SIZE; ++i) {
+        if (i != 0) {
+          uart.print(", ");
+        }
+        uart.print(buffer[i]);
+      }
+      uart.println("]");
+    }
   }
-  if (digitalRead(SPEED_PINS.min_speed_pin) == LOW) {
-    return SpeedMode::MIN_ALWAYS;
-  }
-  return SpeedMode::MAX_ALWAYS;
-#endif
+
+  return percent;
 }

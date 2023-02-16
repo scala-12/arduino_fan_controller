@@ -14,6 +14,8 @@
 #include <MicroUART.h>
 MicroUART uart;
 
+#include <microDS18B20.h>
+
 #include "extra_functions.h"
 
 // системные переменные, нельзя менять
@@ -25,11 +27,18 @@ MicroUART uart;
 #define BUFFER_SIZE 31                     /*размер буфера*/
 #define DEFAULT_MIN_PERCENT 30             /**/
 #define DEFAULT_MAX_PERCENT 65             /**/
+#define DEFAULT_MIN_TEMP 28
+#define DEFAULT_MAX_TEMP 38
 #define SERIAL_SPEED 115200
 #define REFRESH_TIMEOUT 3000
-#define VERSION_NUMBER 3
+#define VERSION_NUMBER 4
 #define INIT_ADDR 1023
 #define READ_PULSE_COMMAND "read_pulses"
+#define READ_TEMPS_COMMAND "read_temps"
+#define SET_MIN_TEMP_COMMAND "set_min_temp"
+#define SET_MAX_TEMP_COMMAND "set_max_temp"
+#define GET_MIN_TEMP_COMMAND "get_min_temp"
+#define GET_MAX_TEMP_COMMAND "get_max_temp"
 #define GET_MIN_PULSES_COMMAND "get_min_pulses"
 #define GET_MAX_PULSES_COMMAND "get_max_pulses"
 #define SAVE_PARAMS_COMMAND "save_params"
@@ -39,8 +48,6 @@ MicroUART uart;
 #define SET_MIN_DUTY_COMMAND "set_min_duty"
 #define GET_MIN_DUTIES_COMMAND "get_min_duties"
 #define SWITCH_DEBUG_COMMAND "switch_debug"
-
-// TODO добавить термометр как дополнительный источник инфы
 
 #define INPUTS_COUNT 3 /*количество ШИМ входов*/
 #define INPUTS_INFO \
@@ -79,20 +86,27 @@ struct Settings {
   byte min_duties[OUTPUTS_COUNT];
   byte min_pulses[INPUTS_COUNT];
   byte max_pulses[INPUTS_COUNT];
+  byte max_temp;
+  byte min_temp;
 };
 
 // информация о сигналах
 InputParams inputs[INPUTS_COUNT];
 OutputParams outputs[OUTPUTS_COUNT];
+// TODO сделать форк чтобы использовать в массиве
+MicroDS18B20<8> sensor_1;
+MicroDS18B20<12> sensor_2;
 
 Settings settings;
 
 void init_input_params();
 void init_output_params(bool is_first, bool init_rpm);
 byte get_max_percent_by_pwm();
+byte get_max_by_sensors(bool show_temp);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
+void init_sensors();
 
 #define add_chars_to_mstring(str, chars)                 \
   for (byte __i__ = 0; __i__ < strlen(chars); ++__i__) { \
@@ -134,6 +148,9 @@ void setup() {
   is_debug = false;
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
+    settings.max_temp = DEFAULT_MAX_TEMP;
+    settings.min_temp = DEFAULT_MIN_TEMP;
+
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       settings.min_duties[i] = MAX_DUTY;
     }
@@ -149,6 +166,7 @@ void setup() {
     init_output_params(true, false);
   }
   init_input_params();
+  init_sensors();
 }
 
 void loop() {
@@ -166,6 +184,13 @@ void loop() {
         uart.print(" ");
         uart.println(inputs[i].pulse);
       }
+    } else if (input_data.startsWith(READ_TEMPS_COMMAND)) {
+      get_max_by_sensors(true);
+    } else if (input_data.startsWith(GET_MIN_TEMP_COMMAND) || input_data.startsWith(GET_MAX_TEMP_COMMAND)) {
+      bool is_min_temp = input_data.startsWith(GET_MIN_TEMP_COMMAND);
+      uart.print(input_data.buf);
+      uart.print(": ");
+      uart.println((is_min_temp) ? settings.min_temp : settings.max_temp);
     } else if (input_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
       uart.print(GET_MIN_DUTIES_COMMAND);
       uart.println(": ");
@@ -192,6 +217,37 @@ void loop() {
         uart.print(i);
         uart.print(" ");
         uart.println(((is_min_pulse) ? settings.min_pulses : settings.max_pulses)[i]);
+      }
+    } else if ((input_data.startsWith(SET_MIN_TEMP_COMMAND)) || input_data.startsWith(SET_MAX_TEMP_COMMAND)) {
+      bool is_max_temp = input_data.startsWith(SET_MAX_TEMP_COMMAND);
+      uart.print((is_max_temp) ? SET_MAX_TEMP_COMMAND : SET_MIN_TEMP_COMMAND);
+      uart.println(": ");
+      bool complete = false;
+      char* params[2];
+      byte split_count = input_data.split(params, ' ');
+      byte sensor_index;
+      byte temp_value;
+      if (split_count >= 2) {
+        mString<3> param;
+        add_chars_to_mstring(param, params[2]);
+        temp_value = param.toInt();
+        if (is_max_temp) {
+          if ((settings.min_temp < temp_value) && (temp_value < 80)) {
+            settings.max_temp = temp_value;
+            complete = true;
+          }
+        } else if ((10 < temp_value) && (temp_value < settings.max_temp)) {
+          settings.min_temp = temp_value;
+          complete = true;
+        }
+      }
+      if (complete) {
+        uart.print("Sensor ");
+        uart.print(sensor_index);
+        uart.print(" value ");
+        uart.println(temp_value);
+      } else {
+        uart.println("error");
       }
     } else if (input_data.startsWith(SET_MIN_DUTY_COMMAND)) {
       uart.print(SET_MIN_DUTY_COMMAND);
@@ -298,7 +354,8 @@ void loop() {
   } else if (abs(time - pwm_tmr) >= REFRESH_TIMEOUT) {
     pwm_tmr = time;
     byte max_percent_by_pwm = get_max_percent_by_pwm();
-    byte percent = max(max_percent_by_pwm, 0);
+    byte max_percent_by_sensors = get_max_by_sensors(is_debug);
+    byte percent = max(max_percent_by_pwm, max_percent_by_sensors);
 
     apply_pwm_4all(percent);
   }
@@ -591,4 +648,32 @@ byte get_max_percent_by_pwm() {
   }
 
   return percent;
+}
+
+void init_sensors() {
+  sensor_1.requestTemp();
+  sensor_2.requestTemp();
+}
+
+byte get_max_by_sensors(bool show_temp) {
+  byte max_temp = settings.min_temp;
+  if (show_temp) uart.print("sensor_1 temp: ");
+  if (sensor_1.readTemp()) {
+    max_temp = sensor_1.getTemp();
+    if (show_temp) uart.println(max_temp);
+  } else {
+    if (show_temp) uart.println("error");
+  }
+
+  if (show_temp) uart.print("sensor_2 temp: ");
+  if (sensor_2.readTemp()) {
+    byte temp = sensor_2.getTemp();
+    max_temp = max(max_temp, temp);
+    if (show_temp) uart.println(temp);
+  } else {
+    if (show_temp) uart.println("error");
+  }
+  init_sensors();
+
+  return convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
 }

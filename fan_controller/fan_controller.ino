@@ -228,7 +228,7 @@ void loop() {
       byte sensor_index;
       byte temp_value;
       if (split_count >= 2) {
-        mString<3> param;
+        mString<8> param;
         add_chars_to_mstring(param, params[2]);
         temp_value = param.toInt();
         if (is_max_temp) {
@@ -258,7 +258,7 @@ void loop() {
       byte output_index;
       byte duty_value;
       if (split_count >= 3) {
-        mString<3> param;
+        mString<8> param;
         add_chars_to_mstring(param, params[1]);
         output_index = param.toInt();
         param.clear();
@@ -288,7 +288,7 @@ void loop() {
       byte input_index;
       byte pulse_value;
       if (split_count >= 3) {
-        mString<3> param;
+        mString<8> param;
         add_chars_to_mstring(param, params[1]);
         input_index = param.toInt();
         param.clear();

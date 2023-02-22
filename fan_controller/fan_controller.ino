@@ -1,39 +1,42 @@
-#define TIME_CORRECTOR(func) ((func >> 8) * 10)
-#define micros() TIME_CORRECTOR(micros())
-#define millis() TIME_CORRECTOR(millis())
-#define fixed_delay(ms)                                                                                \
-  for (uint32_t _tmr_start = millis(), _timer = 0; abs(_timer) < ms; _timer = millis() - _tmr_start) { \
+// коррекция времени из-за изменения частоты Timer0
+#define TIME_CORRECTOR(func) (((func >> 4) * 10) >> 4) /* коррекция time/25.6 */
+#define micros() TIME_CORRECTOR(micros())              /* коррекция micros */
+#define millis() TIME_CORRECTOR(millis())              /* коррекция millis */
+#define fixed_delay(ms)                                /* иммитация delay(ms) через цикл с корректированными функциями времени */ \
+  for (uint32_t _tmr_start = millis(), _timer = 0; abs(_timer) < ms; _timer = millis() - _tmr_start) {                                                                                \
   }
 
 #include <EEPROM.h>
 #include <GyverPWM.h>
 #include <mString.h>
-
-#define MU_RX_BUF 64
-#define MU_PRINT
-#include <MicroUART.h>
-MicroUART uart;
-
 #include <microDS18B20.h>
 
 #include "extra_functions.h"
 
 // системные переменные, нельзя менять
-#define MAX_DUTY 254                       /*максимальное значение заполнения*/
-#define MIN_DUTY 1                         /*минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения*/
-#define PWM_RES 8                          /*битность PWM*/
-#define PULSE_WIDTH 40                     /*период сигнала в микросекундах*/
-#define PULSE_FREQ (1000000 / PULSE_WIDTH) /*частота сигнала*/
-#define BUFFER_SIZE 31                     /*размер буфера*/
-#define DEFAULT_MIN_PERCENT 30             /**/
-#define DEFAULT_MAX_PERCENT 65             /**/
-#define DEFAULT_MIN_TEMP 28
-#define DEFAULT_MAX_TEMP 38
-#define SERIAL_SPEED 115200
-#define REFRESH_TIMEOUT 3000
-#define VERSION_NUMBER 4
-#define INIT_ADDR 1023
-#define PULSE_AVG_POWER 1 /* радиус усреднения медианны для входящего сигнала */
+// настройка UART
+#define MU_RX_BUF 64 /* размер буфера */
+#define MU_PRINT
+#include <MicroUART.h>
+// ^^^ настройка UART ^^^
+MicroUART uart;                            /* интерфейс работы с серийным портом */
+#define MAX_DUTY 254                       /* максимальное значение заполнения */
+#define MIN_DUTY 1                         /* минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения */
+#define PWM_RES 8                          /* битность PWM */
+#define PULSE_WIDTH 40                     /* период сигнала в микросекундах */
+#define PULSE_FREQ (1000000 / PULSE_WIDTH) /* частота сигнала */
+#define BUFFER_SIZE_ON_READ 31             /* размер буфера на чтение PWM сигнала */
+#define BUFFER_SIZE_FOR_SMOOTH 5           /* размер буфера для сглаживания входящего сигнала */
+#define DEFAULT_MIN_PERCENT 30             /* нижняя граница чувствительности к входящему PWM */
+#define DEFAULT_MAX_PERCENT 65             /* верхняя граница чувствительности к входящему PWM */
+#define DEFAULT_MIN_TEMP 28                /* нижняя граница чувсвительности температурного датчика */
+#define DEFAULT_MAX_TEMP 38                /* верхняя граница чувсвительности температурного датчика */
+#define SERIAL_SPEED 115200                /* скорость серийного порта */
+#define REFRESH_TIMEOUT 3000               /* таймаут чтения входящего ЩИМ */
+#define VERSION_NUMBER 4                   /* версия структуры данных, хранящихся в памяти */
+#define INIT_ADDR 1023                     /* ячейка памяти с информацией о структуре хранящихся данных */
+#define PULSE_AVG_POWER 1                  /* радиус усреднения медианны для входящего сигнала */
+
 #define READ_PULSE_COMMAND "read_pulses"
 #define READ_TEMPS_COMMAND "read_temps"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"
@@ -49,6 +52,7 @@ MicroUART uart;
 #define SET_MIN_DUTY_COMMAND "set_min_duty"
 #define GET_MIN_DUTIES_COMMAND "get_min_duties"
 #define SWITCH_DEBUG_COMMAND "switch_debug"
+// ^^^ системные переменные, нельзя менять ^^^
 
 #define INPUTS_COUNT 3 /*количество ШИМ входов*/
 #define INPUTS_INFO \
@@ -61,16 +65,18 @@ MicroUART uart;
     {3, 9, 10, 5}, { 2, 11, 6, 4 } \
   }
 
-#define COOLING_PIN A0
-#define RESET_DUTY_CACHE_PIN 7
+#define COOLING_PIN A0         /* пин включения максимальной скорости */
+#define RESET_DUTY_CACHE_PIN 7 /* пин hard-reset */
+// ^^^ настраиваемые параметры ^^^
 
-bool cooling_on;   // режим максимальной скорости
-uint32_t pwm_tmr;  // таймер чтения ШИМ
-uint32_t tmr_100;  // таймер раз в 100мс
-byte reset_counter;
-mString<64> input_data;
-boolean recieved_flag;
-boolean is_debug;
+// переменные
+bool cooling_on;         // режим максимальной скорости
+uint32_t pwm_tmr;        // таймер для чтения ШИМ
+uint32_t tmr_100;        // таймер раз в 100мс
+byte reset_counter;      // счетчик для hard-reset
+mString<64> input_data;  // буфер чтения команды из серийного порта
+boolean recieved_flag;   // флаг на чтение
+boolean is_debug;        // флаг вывода технической информации
 
 struct InputParams {
   byte pwm_pin;  // пин входящего ШИМ сигнала
@@ -83,12 +89,13 @@ struct OutputParams {
   byte percent_2duty_cache[101];  // кеш преобразования процента в скважность
 };
 
-struct Settings {
-  byte min_duties[OUTPUTS_COUNT];
-  byte min_pulses[INPUTS_COUNT];
-  byte max_pulses[INPUTS_COUNT];
-  byte max_temp;
-  byte min_temp;
+
+struct {                           // хранимые параметры
+  byte min_duties[OUTPUTS_COUNT];  // минимальный PWM для начала вращения
+  byte min_pulses[INPUTS_COUNT];   // нижняя граница чувствительности к входящему PWM
+  byte max_pulses[INPUTS_COUNT];   // верхняя граница чувствительности к входящему PWM
+  byte max_temp;                   // верхняя граница чувсвительности температурного датчика
+  byte min_temp;                   // нижняя граница чувсвительности температурного датчика
 };
 
 // информация о сигналах
@@ -109,13 +116,7 @@ boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
 void init_sensors();
 
-#define add_chars_to_mstring(str, chars)                 \
-  for (byte __i__ = 0; __i__ < strlen(chars); ++__i__) { \
-    str.add(chars[__i__]);                               \
-  }
 #define convert_percent_2pulse(percent) map(percent, 0, 100, 0, PULSE_WIDTH)
-#define convert_by_sqrt(x, min_x, max_x, min_y, max_y) map(sqrt(map(constrain(x, min_x, max_x), min_x, max_x, 0, 900)), 0, 30, min_y, max_y)
-
 #define apply_fan_pwm(index, duty)       \
   PWM_set(outputs[index].pwm_pin, duty); \
   if (is_debug) {                        \
@@ -132,6 +133,7 @@ void init_sensors();
   }
 
 void MU_serialEvent() {
+  // нужна для чтения буфера
 }
 
 void setup() {
@@ -141,17 +143,19 @@ void setup() {
   pinMode(COOLING_PIN, INPUT_PULLUP);
   pinMode(RESET_DUTY_CACHE_PIN, INPUT_PULLUP);
 
-  cooling_on = false;  // не режим продувки
-  pwm_tmr = 0;         // обнуляем таймер
+  // обнуляем таймеры
+  pwm_tmr = 0;
   tmr_100 = 0;
-  reset_counter = 0;
-  input_data = "";
-  is_debug = false;
+
+  reset_counter = 0;   // счетчик продолжительности нажатия кнопки hard-reset
+  cooling_on = false;  // не режим продувки
+  input_data = "";     // ощищаем буфер
+  is_debug = false;    // не дебаг
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
+    // если структура хранимых данных изменена, то делаем дефолт
     settings.max_temp = DEFAULT_MAX_TEMP;
     settings.min_temp = DEFAULT_MIN_TEMP;
-
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       settings.min_duties[i] = MAX_DUTY;
     }
@@ -159,6 +163,7 @@ void setup() {
       settings.min_pulses[i] = convert_percent_2pulse(DEFAULT_MIN_PERCENT);
       settings.max_pulses[i] = convert_percent_2pulse(DEFAULT_MAX_PERCENT);
     }
+
     init_output_params(true, true);
     EEPROM.put(0, settings);
     EEPROM.write(INIT_ADDR, VERSION_NUMBER);
@@ -172,11 +177,12 @@ void setup() {
 
 void loop() {
   while (uart.available() > 0) {
+    // чтение команды с серийного порта
     input_data.add((char)uart.read());
     recieved_flag = true;
     fixed_delay(20);
   }
-  if (recieved_flag) {
+  if (recieved_flag && input_data.length() > 3) {
     if (input_data.startsWith(READ_PULSE_COMMAND)) {
       uart.print(READ_PULSE_COMMAND);
       uart.println(": ");
@@ -394,11 +400,6 @@ boolean has_rpm(byte index, byte more_than_rpm) {
 boolean has_rpm(byte index) {
   return has_rpm(index, 0);
 }
-
-#define print_bits(bits, size)                                    \
-  for (byte __counter__ = 0; __counter__ < size; ++__counter__) { \
-    uart.print((bitRead(bits, __counter__)) ? 1 : 0);             \
-  }
 
 /**
  *  останавливает вентиляторы, за исключением указанных в ignored_bits

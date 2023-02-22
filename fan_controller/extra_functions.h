@@ -57,3 +57,13 @@ template <byte SIZE>
 byte find_median(byte* buffer, bool with_simple_avg) {
   return find_median<SIZE>(buffer, (with_simple_avg) ? 1 : 0, false);
 }
+
+#define convert_by_sqrt(x, min_x, max_x, min_y, max_y) map(sqrt(map(constrain(x, min_x, max_x), min_x, max_x, 0, 900)), 0, 30, min_y, max_y)
+#define add_chars_to_mstring(str, chars)                 \
+  for (byte __i__ = 0; __i__ < strlen(chars); ++__i__) { \
+    str.add(chars[__i__]);                               \
+  }
+#define print_bits(bits, size)                                    \
+  for (byte __counter__ = 0; __counter__ < size; ++__counter__) { \
+    uart.print((bitRead(bits, __counter__)) ? 1 : 0);             \
+  }

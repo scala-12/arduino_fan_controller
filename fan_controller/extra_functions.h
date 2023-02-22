@@ -1,5 +1,5 @@
 // from Alex Gyver site
-bool digitalReadFast(uint8_t pin) {
+bool digital_read_fast(uint8_t pin) {
   if (pin < 8) {
     return bitRead(PIND, pin);
   } else if (pin < 14) {

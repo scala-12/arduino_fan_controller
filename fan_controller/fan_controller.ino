@@ -329,11 +329,11 @@ void loop() {
   if (abs(time - tmr_100) >= 1000) {
     tmr_100 = time;
 
-    if ((reset_counter != 0) && digitalReadFast(RESET_DUTY_CACHE_PIN) == HIGH) {
+    if ((reset_counter != 0) && digital_read_fast(RESET_DUTY_CACHE_PIN) == HIGH) {
       reset_counter = 0;
     }
   } else {
-    if (digitalReadFast(RESET_DUTY_CACHE_PIN) == LOW) {
+    if (digital_read_fast(RESET_DUTY_CACHE_PIN) == LOW) {
       if (reset_counter == 255) {
         init_output_params(false, true);
       } else {
@@ -380,7 +380,7 @@ boolean has_rpm(byte index, byte more_than_rpm) {
   if (rpm == 0) {
     rpm = pulseIn(outputs[index].rpm_pin, LOW, 1500000);
     if (rpm == 0) {
-      rpm = (digitalReadFast(outputs[index].rpm_pin) == LOW) ? 1 : 0;
+      rpm = (digital_read_fast(outputs[index].rpm_pin) == LOW) ? 1 : 0;
     }
   }
 
@@ -611,7 +611,7 @@ byte get_max_percent_by_pwm() {
   for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
     for (byte i = 0; i < last_buffer_index; ++i) {
       buffer[i] = pulseIn(inputs[input_index].pwm_pin, HIGH, (PULSE_WIDTH << 1));
-      if ((buffer[i] == 0) && (digitalReadFast(inputs[input_index].pwm_pin) == HIGH)) {
+      if ((buffer[i] == 0) && (digital_read_fast(inputs[input_index].pwm_pin) == HIGH)) {
         buffer[i] = PULSE_WIDTH;
       } else {
         buffer[i] = constrain(buffer[i], 0, PULSE_WIDTH);

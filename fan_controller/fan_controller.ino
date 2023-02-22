@@ -25,17 +25,19 @@ MicroUART uart;                            /* интерфейс работы с
 #define PWM_RES 8                          /* битность PWM */
 #define PULSE_WIDTH 40                     /* период сигнала в микросекундах */
 #define PULSE_FREQ (1000000 / PULSE_WIDTH) /* частота сигнала */
-#define BUFFER_SIZE_ON_READ 31             /* размер буфера на чтение PWM сигнала */
+#define BUFFER_SIZE_ON_READ 15             /* размер буфера на чтение PWM сигнала */
 #define BUFFER_SIZE_FOR_SMOOTH 5           /* размер буфера для сглаживания входящего сигнала */
 #define DEFAULT_MIN_PERCENT 30             /* нижняя граница чувствительности к входящему PWM */
 #define DEFAULT_MAX_PERCENT 65             /* верхняя граница чувствительности к входящему PWM */
 #define DEFAULT_MIN_TEMP 28                /* нижняя граница чувсвительности температурного датчика */
 #define DEFAULT_MAX_TEMP 38                /* верхняя граница чувсвительности температурного датчика */
 #define SERIAL_SPEED 115200                /* скорость серийного порта */
-#define REFRESH_TIMEOUT 3000               /* таймаут чтения входящего ЩИМ */
+#define REFRESH_TIMEOUT 2000               /* таймаут чтения входящего ЩИМ */
 #define VERSION_NUMBER 4                   /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023                     /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1                  /* радиус усреднения медианны для входящего сигнала */
+
+#define get_arr_len(arr) sizeof(arr) / sizeof(arr[0]) /* найти длину массива */
 
 #define READ_PULSE_COMMAND "read_pulses"
 #define READ_TEMPS_COMMAND "read_temps"
@@ -54,22 +56,24 @@ MicroUART uart;                            /* интерфейс работы с
 #define SWITCH_DEBUG_COMMAND "switch_debug"
 // ^^^ системные переменные, нельзя менять ^^^
 
-#define INPUTS_COUNT 3 /*количество ШИМ входов*/
-#define INPUTS_INFO \
-  { A1, A2, A3 } /*пины входящих ШИМ*/
-
-#define OUTPUTS_COUNT 4 /*количество ШИМ выходов*/
-// [параметр][номер выхода]. параметры: pwm_pin, rpm_pin
-#define OUTPUTS_INFO               \
-  {                                \
-    {3, 9, 10, 5}, { 2, 11, 6, 4 } \
-  }
+// настраиваемые параметры
+const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
+const byte OUTPUTS_PINS[][2] = {{3, 2}, {9, 11}, {10, 6}, {5, 4}};  // пины [выходящий PWM, RPM]
 
 #define COOLING_PIN A0         /* пин включения максимальной скорости */
 #define RESET_DUTY_CACHE_PIN 7 /* пин hard-reset */
 // ^^^ настраиваемые параметры ^^^
 
+// вычисляемые константы
+const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество ШИМ входов
+const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество ШИМ выходов
+
 // переменные
+byte smooth_buffer[INPUTS_COUNT][BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
+// TODO проверить нужен ли кеш или вычислять на ходу
+byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
+
+byte smooth_index;       // шаг для сглаживания
 bool cooling_on;         // режим максимальной скорости
 uint32_t pwm_tmr;        // таймер для чтения ШИМ
 uint32_t tmr_100;        // таймер раз в 100мс
@@ -78,36 +82,17 @@ mString<64> input_data;  // буфер чтения команды из сери
 boolean recieved_flag;   // флаг на чтение
 boolean is_debug;        // флаг вывода технической информации
 
-struct InputParams {
-  byte pwm_pin;  // пин входящего ШИМ сигнала
-  byte pulse;    // текущий PWM
-};
-
-struct OutputParams {
-  byte pwm_pin;                   // пин выходного ШИМ сигнала
-  byte rpm_pin;                   // пин тахометра
-  byte percent_2duty_cache[101];  // кеш преобразования процента в скважность
-};
-
-
 struct {                           // хранимые параметры
   byte min_duties[OUTPUTS_COUNT];  // минимальный PWM для начала вращения
   byte min_pulses[INPUTS_COUNT];   // нижняя граница чувствительности к входящему PWM
   byte max_pulses[INPUTS_COUNT];   // верхняя граница чувствительности к входящему PWM
   byte max_temp;                   // верхняя граница чувсвительности температурного датчика
   byte min_temp;                   // нижняя граница чувсвительности температурного датчика
-};
+} settings;
 
-// информация о сигналах
-InputParams inputs[INPUTS_COUNT];
-OutputParams outputs[OUTPUTS_COUNT];
 // TODO сделать форк чтобы использовать в массиве
 MicroDS18B20<8> sensor_1;
 MicroDS18B20<12> sensor_2;
-
-Settings settings;
-
-void init_input_params();
 void init_output_params(bool is_first, bool init_rpm);
 byte get_max_percent_by_pwm();
 byte get_max_by_sensors(bool show_temp);
@@ -116,20 +101,37 @@ boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
 void init_sensors();
 
+#define get_out_pin(index) OUTPUTS_PINS[index][0]
+#define get_rpm_pin(index) OUTPUTS_PINS[index][1]
+#define get_cached_duty(index, percent) percent_2duty_cache[index][percent]
+#define update_cached_duty(index, percent, duty) percent_2duty_cache[index][percent] = duty
 #define convert_percent_2pulse(percent) map(percent, 0, 100, 0, PULSE_WIDTH)
-#define apply_fan_pwm(index, duty)       \
-  PWM_set(outputs[index].pwm_pin, duty); \
-  if (is_debug) {                        \
-    uart.print("Fan ");                  \
-    uart.print(outputs[index].pwm_pin);  \
-    uart.print(", duty ");               \
-    uart.println(duty);                  \
+#define apply_fan_pwm(index, duty)   \
+  PWM_set(get_out_pin(index), duty); \
+  if (is_debug) {                    \
+    uart.print("Fan ");              \
+    uart.print(get_out_pin(index));  \
+    uart.print(", duty ");           \
+    uart.println(duty);              \
   }
-#define apply_pwm_4all(percent)                                \
-  uart.print("pwm percent:");                                  \
-  uart.println(percent);                                       \
-  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {                   \
-    apply_fan_pwm(i, outputs[i].percent_2duty_cache[percent]); \
+#define apply_pwm_4all(percent)                    \
+  uart.print("pwm percent:");                      \
+  uart.println(percent);                           \
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {       \
+    apply_fan_pwm(i, get_cached_duty(i, percent)); \
+  }
+#define read_pulses_into_array(array)                                                             \
+  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {                         \
+    byte buffer_on_read[BUFFER_SIZE_ON_READ];                                                     \
+    for (byte i = 0; i < BUFFER_SIZE_ON_READ; ++i) {                                              \
+      buffer_on_read[i] = pulseIn(INPUTS_PINS[input_index], HIGH, (PULSE_WIDTH << 1));            \
+      if ((buffer_on_read[i] == 0) && (digital_read_fast(INPUTS_PINS[input_index]) == HIGH)) {    \
+        buffer_on_read[i] = PULSE_WIDTH;                                                          \
+      } else {                                                                                    \
+        buffer_on_read[i] = constrain(buffer_on_read[i], 0, PULSE_WIDTH);                         \
+      }                                                                                           \
+    }                                                                                             \
+    array[input_index] = find_median<BUFFER_SIZE_ON_READ>(buffer_on_read, PULSE_AVG_POWER, true); \
   }
 
 void MU_serialEvent() {
@@ -142,12 +144,17 @@ void setup() {
 
   pinMode(COOLING_PIN, INPUT_PULLUP);
   pinMode(RESET_DUTY_CACHE_PIN, INPUT_PULLUP);
+  for (byte i = 0; i < INPUTS_COUNT; ++i) {
+    pinMode(INPUTS_PINS[i], INPUT);
+    memset(smooth_buffer[i], 0, BUFFER_SIZE_FOR_SMOOTH);
+  }
 
   // обнуляем таймеры
   pwm_tmr = 0;
   tmr_100 = 0;
 
   reset_counter = 0;   // счетчик продолжительности нажатия кнопки hard-reset
+  smooth_index = 0;    // номер шага в буфере для сглаживания
   cooling_on = false;  // не режим продувки
   input_data = "";     // ощищаем буфер
   is_debug = false;    // не дебаг
@@ -171,7 +178,6 @@ void setup() {
     EEPROM.get(0, settings);
     init_output_params(true, false);
   }
-  init_input_params();
   init_sensors();
 }
 
@@ -186,10 +192,13 @@ void loop() {
     if (input_data.startsWith(READ_PULSE_COMMAND)) {
       uart.print(READ_PULSE_COMMAND);
       uart.println(": ");
+
+      byte pulses[INPUTS_COUNT];
+      read_pulses_into_array(pulses);
       for (byte i = 0; i < INPUTS_COUNT; ++i) {
         uart.print(i);
         uart.print(" ");
-        uart.println(inputs[i].pulse);
+        uart.println(pulses[i]);
       }
     } else if (input_data.startsWith(READ_TEMPS_COMMAND)) {
       get_max_by_sensors(true);
@@ -368,26 +377,15 @@ void loop() {
   }
 }
 
-void init_input_params() {
-  byte inputs_info[INPUTS_COUNT] = INPUTS_INFO;
-  for (byte i = 0; i < INPUTS_COUNT; ++i) {
-    inputs[i].pwm_pin = inputs_info[i];
-
-    pinMode(inputs[i].pwm_pin, INPUT);
-
-    inputs[i].pulse = 0;
-  }
-}
-
 boolean has_rpm(byte index, byte more_than_rpm) {
   uart.print("fan ");
-  uart.print(outputs[index].pwm_pin);
+  uart.print(get_out_pin(index));
 
-  unsigned long rpm = pulseIn(outputs[index].rpm_pin, HIGH, 500000);
+  unsigned long rpm = pulseIn(get_rpm_pin(index), HIGH, 500000);
   if (rpm == 0) {
-    rpm = pulseIn(outputs[index].rpm_pin, LOW, 1500000);
+    rpm = pulseIn(get_rpm_pin(index), LOW, 1500000);
     if (rpm == 0) {
-      rpm = (digital_read_fast(outputs[index].rpm_pin) == LOW) ? 1 : 0;
+      rpm = (digital_read_fast(get_rpm_pin(index)) == LOW) ? 1 : 0;
     }
   }
 
@@ -460,15 +458,11 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
 
 void init_output_params(bool is_first, bool init_rpm) {
   if (is_first) {
-    byte outputs_info[][OUTPUTS_COUNT] = OUTPUTS_INFO;
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-      outputs[i].pwm_pin = outputs_info[0][i];
-      outputs[i].rpm_pin = outputs_info[1][i];
+      pinMode(get_out_pin(i), OUTPUT);
+      pinMode(get_rpm_pin(i), INPUT_PULLUP);
 
-      pinMode(outputs[i].pwm_pin, OUTPUT);
-      pinMode(outputs[i].rpm_pin, INPUT_PULLUP);
-
-      PWM_frequency(outputs[i].pwm_pin, PULSE_FREQ, FAST_PWM);
+      PWM_frequency(get_out_pin(i), PULSE_FREQ, FAST_PWM);
     }
   }
 
@@ -489,7 +483,7 @@ void init_output_params(bool is_first, bool init_rpm) {
         bitSet(ignored_bits, i);
         settings.min_duties[i] = MIN_DUTY;
         uart.print("fan ");
-        uart.print(outputs[i].pwm_pin);
+        uart.print(get_out_pin(i));
         uart.println(" without RPM");
       } else {
         settings.min_duties[i] = MAX_DUTY;
@@ -512,7 +506,7 @@ void init_output_params(bool is_first, bool init_rpm) {
         for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
           if (!bitRead(ignored_bits, i)) {
             uart.print("fan ");
-            uart.print(outputs[i].pwm_pin);
+            uart.print(get_out_pin(i));
             uart.print(" binary search min duty [");
             uart.print(start_duties[i]);
             uart.print(", ");
@@ -566,7 +560,7 @@ void init_output_params(bool is_first, bool init_rpm) {
             if (bitRead(changed_bits, i) && has_rpm(i, 50)) {
               bitSet(ready_bits, i);
               uart.print("fan ");
-              uart.print(outputs[i].pwm_pin);
+              uart.print(get_out_pin(i));
               uart.print(" min duty ");
               uart.println(settings.min_duties[i]);
             }
@@ -583,14 +577,14 @@ void init_output_params(bool is_first, bool init_rpm) {
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
     for (byte p = 0; p <= 100; ++p) {
-      outputs[i].percent_2duty_cache[p] = convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY);
+      update_cached_duty(i, p, convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY));
     }
   }
 
   uart.println("Outputs created");
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
     uart.print("values for ");
-    uart.print(outputs[i].pwm_pin);
+    uart.print(get_out_pin(i));
     uart.println(":");
     for (byte p = 0, j = 0; p <= 100; ++p, ++j) {
       if (j == 10) {
@@ -599,7 +593,7 @@ void init_output_params(bool is_first, bool init_rpm) {
       }
       uart.print(p);
       uart.print("% ");
-      uart.print(outputs[i].percent_2duty_cache[p]);
+      uart.print(get_cached_duty(i, p));
       uart.print("\t");
     }
     uart.println();
@@ -607,22 +601,13 @@ void init_output_params(bool is_first, bool init_rpm) {
 }
 
 byte get_max_percent_by_pwm() {
-  byte buffer[BUFFER_SIZE];
-  byte last_buffer_index = BUFFER_SIZE - 1;
   byte percent = 0;
+  byte pulses[INPUTS_COUNT];
+  read_pulses_into_array(pulses);
   for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
-    for (byte i = 0; i < last_buffer_index; ++i) {
-      buffer[i] = pulseIn(inputs[input_index].pwm_pin, HIGH, (PULSE_WIDTH << 1));
-      if ((buffer[i] == 0) && (digital_read_fast(inputs[input_index].pwm_pin) == HIGH)) {
-        buffer[i] = PULSE_WIDTH;
-      } else {
-        buffer[i] = constrain(buffer[i], 0, PULSE_WIDTH);
-      }
-    }
-    buffer[last_buffer_index] = inputs[input_index].pulse;
-    inputs[input_index].pulse = find_median<BUFFER_SIZE>(buffer, PULSE_AVG_POWER, true);
-
-    byte pulse = constrain(inputs[input_index].pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
+    smooth_buffer[input_index][smooth_index] = pulses[input_index];
+    byte smooth_pulse = find_median<BUFFER_SIZE_FOR_SMOOTH>(smooth_buffer[input_index], true);
+    byte pulse = constrain(smooth_pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
     byte pulse_2percent = map(
         pulse,
         settings.min_pulses[input_index], settings.max_pulses[input_index],
@@ -631,22 +616,31 @@ byte get_max_percent_by_pwm() {
 
     if (is_debug) {
       uart.print("input ");
-      uart.print(inputs[input_index].pwm_pin);
-      uart.print(": ");
-      uart.print(inputs[input_index].pulse);
-      uart.print("(");
+      uart.print(INPUTS_PINS[input_index]);
+      uart.print(": pulse ");
       uart.print(pulse);
-      uart.print(", ");
+      uart.print(" (");
       uart.print(pulse_2percent);
-      uart.print("%), from [");
-      for (byte i = 0; i < BUFFER_SIZE; ++i) {
+      uart.print("%); avg smooth ");
+      uart.print(smooth_pulse);
+      uart.print(" [");
+      for (byte i = 0; i < BUFFER_SIZE_FOR_SMOOTH; ++i) {
         if (i != 0) {
           uart.print(", ");
         }
-        uart.print(buffer[i]);
+        if (i == smooth_index) {
+          uart.print("{");
+        }
+        uart.print(smooth_buffer[input_index][i]);
+        if (i == smooth_index) {
+          uart.print("}");
+        }
       }
       uart.println("]");
     }
+  }
+  if (++smooth_index >= BUFFER_SIZE_FOR_SMOOTH) {
+    smooth_index = 0;
   }
 
   return percent;

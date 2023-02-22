@@ -33,6 +33,7 @@ MicroUART uart;
 #define REFRESH_TIMEOUT 3000
 #define VERSION_NUMBER 4
 #define INIT_ADDR 1023
+#define PULSE_AVG_POWER 1 /* радиус усреднения медианны для входящего сигнала */
 #define READ_PULSE_COMMAND "read_pulses"
 #define READ_TEMPS_COMMAND "read_temps"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"
@@ -618,7 +619,7 @@ byte get_max_percent_by_pwm() {
       }
     }
     buffer[last_buffer_index] = inputs[input_index].pulse;
-    inputs[input_index].pulse = find_median(buffer, BUFFER_SIZE);
+    inputs[input_index].pulse = find_median<BUFFER_SIZE>(buffer, PULSE_AVG_POWER, true);
 
     byte pulse = constrain(inputs[input_index].pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
     byte pulse_2percent = map(

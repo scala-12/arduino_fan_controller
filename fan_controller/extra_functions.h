@@ -9,19 +9,51 @@ bool digital_read_fast(uint8_t pin) {
   }
 }
 
-byte find_median(byte* buffer, byte size) {
-  for (int j = 0; j < size; ++j) {
-    byte temp = buffer[j];
+template <byte SIZE>
+byte find_median(byte buffer[SIZE], byte avarage_radius, bool do_sort) {
+  byte* sorted;
+  if (do_sort) {
+    sorted = buffer;
+  } else {
+    byte buffer_copy[SIZE];
+    for (byte i = 0; i < SIZE; ++i) {
+      buffer_copy[i] = buffer[i];
+    }
+    sorted = buffer_copy;
+  }
+
+  for (int j = 0; j < SIZE; ++j) {
+    byte temp = sorted[j];
     byte ind = j;
-    for (byte i = j + 1; i < size; ++i) {
-      if (temp > buffer[i]) {
-        temp = buffer[i];
+    for (byte i = j + 1; i < SIZE; ++i) {
+      if (temp > sorted[i]) {
+        temp = sorted[i];
         ind = i;
       }
     }
-    buffer[ind] = buffer[j];
-    buffer[j] = temp;
+    sorted[ind] = sorted[j];
+    sorted[j] = temp;
   }
 
-  return buffer[(int)size / 2];
+  byte middle_index = SIZE >> 1;
+  if (avarage_radius <= 0) {
+    return sorted[middle_index];
+  }
+
+  int sum = sorted[middle_index];
+  for (byte i = 1; i <= avarage_radius; ++i) {
+    sum += sorted[middle_index + i] + sorted[middle_index - i];
+  }
+
+  return sum / ((avarage_radius << 1) + 1);
+}
+
+template <byte SIZE>
+byte find_median(byte* buffer) {
+  return find_median<SIZE>(buffer, 0, false);
+}
+
+template <byte SIZE>
+byte find_median(byte* buffer, bool with_simple_avg) {
+  return find_median<SIZE>(buffer, (with_simple_avg) ? 1 : 0, false);
 }

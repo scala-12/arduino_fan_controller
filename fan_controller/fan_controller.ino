@@ -9,7 +9,24 @@
 #include <EEPROM.h>
 #include <GyverPWM.h>
 #include <mString.h>
-#include <microDS18B20.h>
+#include <microDS18B20.h> /*
+  использовать форк https://github.com/scala-12/microDS18B20:
+  - из template аргумент DS_PIN перемещен в переменные, изменены конструкторы
+    MicroDS18B20(uint8_t ds_pin, bool with_init) {
+      DS_PIN = ds_pin;
+      if (with_init) {
+        pinMode(DS_PIN, INPUT);
+        digitalWrite(DS_PIN, LOW);
+      }
+    }
+    MicroDS18B20(uint8_t ds_pin) {
+      MicroDS18B20(ds_pin, true);
+    }
+  - добавлен метод:
+    uint8_t get_pin() {
+      return DS_PIN;
+    }
+*/
 
 #include "extra_functions.h"
 
@@ -59,6 +76,7 @@ MicroUART uart;                            /* интерфейс работы с
 // настраиваемые параметры
 const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {9, 11}, {10, 6}, {5, 4}};  // пины [выходящий PWM, RPM]
+const byte SENSORS_PINS[] = {8, 12};                                // пины датчиков температуры
 
 #define COOLING_PIN A0         /* пин включения максимальной скорости */
 #define RESET_DUTY_CACHE_PIN 7 /* пин hard-reset */
@@ -67,6 +85,7 @@ const byte OUTPUTS_PINS[][2] = {{3, 2}, {9, 11}, {10, 6}, {5, 4}};  // пины 
 // вычисляемые константы
 const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество ШИМ входов
 const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество ШИМ выходов
+const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
 
 // переменные
 byte smooth_buffer[INPUTS_COUNT][BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
@@ -90,16 +109,12 @@ struct {                           // хранимые параметры
   byte min_temp;                   // нижняя граница чувсвительности температурного датчика
 } settings;
 
-// TODO сделать форк чтобы использовать в массиве
-MicroDS18B20<8> sensor_1;
-MicroDS18B20<12> sensor_2;
 void init_output_params(bool is_first, bool init_rpm);
 byte get_max_percent_by_pwm();
 byte get_max_by_sensors(bool show_temp);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
-void init_sensors();
 
 #define get_out_pin(index) OUTPUTS_PINS[index][0]
 #define get_rpm_pin(index) OUTPUTS_PINS[index][1]
@@ -148,6 +163,10 @@ void setup() {
     pinMode(INPUTS_PINS[i], INPUT);
     memset(smooth_buffer[i], 0, BUFFER_SIZE_FOR_SMOOTH);
   }
+  for (byte i = 0; i < SENSORS_COUNT; ++i) {
+    MicroDS18B20<> sensor(SENSORS_PINS[i]);
+    sensor.requestTemp();
+  }
 
   // обнуляем таймеры
   pwm_tmr = 0;
@@ -178,7 +197,6 @@ void setup() {
     EEPROM.get(0, settings);
     init_output_params(true, false);
   }
-  init_sensors();
 }
 
 void loop() {
@@ -646,30 +664,28 @@ byte get_max_percent_by_pwm() {
   return percent;
 }
 
-void init_sensors() {
-  sensor_1.requestTemp();
-  sensor_2.requestTemp();
-}
-
 byte get_max_by_sensors(bool show_temp) {
   byte max_temp = settings.min_temp;
-  if (show_temp) uart.print("sensor_1 temp: ");
-  if (sensor_1.readTemp()) {
-    max_temp = sensor_1.getTemp();
-    if (show_temp) uart.println(max_temp);
-  } else {
-    if (show_temp) uart.println("error");
+  for (byte i = 0; i < SENSORS_COUNT; ++i) {
+    MicroDS18B20<> sensor(SENSORS_PINS[i], false);
+    if (show_temp) {
+      uart.print("temp ");
+      uart.print(sensor.get_pin());
+      uart.print(": ");
+    }
+    if (sensor.readTemp()) {
+      byte temp = sensor.getTemp();
+      if (show_temp) {
+        uart.println(temp);
+      }
+      max_temp = max(temp, max_temp);
+    } else {
+      if (show_temp) {
+        uart.println("error");
+      }
+    }
+    sensor.requestTemp();
   }
-
-  if (show_temp) uart.print("sensor_2 temp: ");
-  if (sensor_2.readTemp()) {
-    byte temp = sensor_2.getTemp();
-    max_temp = max(max_temp, temp);
-    if (show_temp) uart.println(temp);
-  } else {
-    if (show_temp) uart.println("error");
-  }
-  init_sensors();
 
   return convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
 }

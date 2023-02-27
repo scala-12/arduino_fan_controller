@@ -108,7 +108,7 @@ struct {                           // хранимые параметры
 
 void init_output_params(bool is_first, bool init_rpm);
 byte get_max_percent_by_pwm();
-byte get_max_by_sensors(bool show_temp);
+byte get_max_by_sensors(bool do_cmd_print);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
@@ -184,9 +184,7 @@ void setup() {
       settings.max_pulses[i] = convert_percent_2pulse(DEFAULT_MAX_PERCENT);
     }
 
-    init_output_params(true, true);
-    EEPROM.put(0, settings);
-    EEPROM.write(INIT_ADDR, VERSION_NUMBER);
+    init_output_params(true, false);
   } else {
     EEPROM.get(0, settings);
     init_output_params(true, false);
@@ -253,11 +251,10 @@ void loop() {
       bool complete = false;
       char* params[2];
       byte split_count = input_data.split(params, ' ');
-      byte sensor_index;
       byte temp_value;
       if (split_count >= 2) {
         mString<8> param;
-        add_chars_to_mstring(param, params[2]);
+        param.add(params[1]);
         temp_value = param.toInt();
         if (is_max_temp) {
           if ((settings.min_temp < temp_value) && (temp_value < 80)) {
@@ -270,9 +267,7 @@ void loop() {
         }
       }
       if (complete) {
-        uart.print("Sensor ");
-        uart.print(sensor_index);
-        uart.print(" value ");
+        uart.print("Temp value ");
         uart.println(temp_value);
       } else {
         uart.println("error");
@@ -287,10 +282,10 @@ void loop() {
       byte duty_value;
       if (split_count >= 3) {
         mString<8> param;
-        add_chars_to_mstring(param, params[1]);
+        param.add(params[1]);
         output_index = param.toInt();
         param.clear();
-        add_chars_to_mstring(param, params[2]);
+        param.add(params[2]);
         duty_value = param.toInt();
         if ((output_index < OUTPUTS_COUNT) && (MIN_DUTY <= duty_value) && (duty_value <= MAX_DUTY)) {
           settings.min_duties[output_index] = duty_value;
@@ -317,10 +312,10 @@ void loop() {
       byte pulse_value;
       if (split_count >= 3) {
         mString<8> param;
-        add_chars_to_mstring(param, params[1]);
+        param.add(params[1]);
         input_index = param.toInt();
         param.clear();
-        add_chars_to_mstring(param, params[2]);
+        param.add(params[2]);
         pulse_value = param.toInt();
         if (input_index < INPUTS_COUNT) {
           if (is_max_pulse) {
@@ -642,23 +637,23 @@ byte get_max_percent_by_pwm() {
   return percent;
 }
 
-byte get_max_by_sensors(bool show_temp) {
+byte get_max_by_sensors(bool do_cmd_print) {
   byte max_temp = settings.min_temp;
   for (byte i = 0; i < SENSORS_COUNT; ++i) {
     MicroDS18B20<> sensor(SENSORS_PINS[i], false);
-    if (show_temp) {
+    if (do_cmd_print) {
       uart.print("temp ");
       uart.print(sensor.get_pin());
       uart.print(": ");
     }
     if (sensor.readTemp()) {
       byte temp = sensor.getTemp();
-      if (show_temp) {
+      if (do_cmd_print) {
         uart.println(temp);
       }
       max_temp = max(temp, max_temp);
     } else {
-      if (show_temp) {
+      if (do_cmd_print) {
         uart.println("error");
       }
     }
@@ -667,3 +662,4 @@ byte get_max_by_sensors(bool show_temp) {
 
   return convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
 }
+

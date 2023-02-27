@@ -78,8 +78,7 @@ const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины 
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {9, 11}, {10, 6}, {5, 4}};  // пины [выходящий PWM, RPM]
 const byte SENSORS_PINS[] = {8, 12};                                // пины датчиков температуры
 
-#define COOLING_PIN A0         /* пин включения максимальной скорости */
-#define RESET_DUTY_CACHE_PIN 7 /* пин hard-reset */
+#define COOLING_PIN A0 /* пин включения максимальной скорости */
 // ^^^ настраиваемые параметры ^^^
 
 // вычисляемые константы
@@ -95,8 +94,6 @@ byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразова�
 byte smooth_index;       // шаг для сглаживания
 bool cooling_on;         // режим максимальной скорости
 uint32_t pwm_tmr;        // таймер для чтения ШИМ
-uint32_t tmr_100;        // таймер раз в 100мс
-byte reset_counter;      // счетчик для hard-reset
 mString<64> input_data;  // буфер чтения команды из серийного порта
 boolean recieved_flag;   // флаг на чтение
 boolean is_debug;        // флаг вывода технической информации
@@ -158,7 +155,6 @@ void setup() {
   uart.println("start");
 
   pinMode(COOLING_PIN, INPUT_PULLUP);
-  pinMode(RESET_DUTY_CACHE_PIN, INPUT_PULLUP);
   for (byte i = 0; i < INPUTS_COUNT; ++i) {
     pinMode(INPUTS_PINS[i], INPUT);
     memset(smooth_buffer[i], 0, BUFFER_SIZE_FOR_SMOOTH);
@@ -170,9 +166,7 @@ void setup() {
 
   // обнуляем таймеры
   pwm_tmr = 0;
-  tmr_100 = 0;
 
-  reset_counter = 0;   // счетчик продолжительности нажатия кнопки hard-reset
   smooth_index = 0;    // номер шага в буфере для сглаживания
   cooling_on = false;  // не режим продувки
   input_data = "";     // ощищаем буфер
@@ -360,22 +354,6 @@ void loop() {
   }
 
   uint32_t time = millis();
-  if (abs(time - tmr_100) >= 1000) {
-    tmr_100 = time;
-
-    if ((reset_counter != 0) && digital_read_fast(RESET_DUTY_CACHE_PIN) == HIGH) {
-      reset_counter = 0;
-    }
-  } else {
-    if (digital_read_fast(RESET_DUTY_CACHE_PIN) == LOW) {
-      if (reset_counter == 255) {
-        init_output_params(false, true);
-      } else {
-        ++reset_counter;
-      }
-    }
-  }
-
   if (cooling_on) {
     if (digitalRead(COOLING_PIN) == LOW) {
       cooling_on = false;

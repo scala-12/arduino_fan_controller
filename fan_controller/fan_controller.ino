@@ -109,6 +109,7 @@ struct {                           // хранимые параметры
 void init_output_params(bool is_first, bool init_rpm);
 byte get_max_percent_by_pwm();
 byte get_max_by_sensors(bool do_cmd_print);
+void read_and_exec_command();
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index);
 boolean has_rpm(byte index, byte more_than_rpm);
@@ -192,161 +193,7 @@ void setup() {
 }
 
 void loop() {
-  while (uart.available() > 0) {
-    // чтение команды с серийного порта
-    input_data.add((char)uart.read());
-    recieved_flag = true;
-    fixed_delay(20);
-  }
-  if (recieved_flag && input_data.length() > 3) {
-    if (input_data.startsWith(READ_PULSE_COMMAND)) {
-      uart.print(READ_PULSE_COMMAND);
-      uart.println(": ");
-
-      byte pulses[INPUTS_COUNT];
-      read_pulses_into_array(pulses);
-      for (byte i = 0; i < INPUTS_COUNT; ++i) {
-        uart.print(i);
-        uart.print(" ");
-        uart.println(pulses[i]);
-      }
-    } else if (input_data.startsWith(READ_TEMPS_COMMAND)) {
-      get_max_by_sensors(true);
-    } else if (input_data.startsWith(GET_MIN_TEMP_COMMAND) || input_data.startsWith(GET_MAX_TEMP_COMMAND)) {
-      bool is_min_temp = input_data.startsWith(GET_MIN_TEMP_COMMAND);
-      uart.print(input_data.buf);
-      uart.print(": ");
-      uart.println((is_min_temp) ? settings.min_temp : settings.max_temp);
-    } else if (input_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
-      uart.print(GET_MIN_DUTIES_COMMAND);
-      uart.println(": ");
-      for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-        uart.print(i);
-        uart.print(" ");
-        uart.println(settings.min_duties[i]);
-      }
-    } else if (input_data.startsWith(SAVE_PARAMS_COMMAND)) {
-      uart.print(SAVE_PARAMS_COMMAND);
-      uart.print(": complete");
-      EEPROM.put(0, settings);
-    } else if (input_data.startsWith(RESET_MIN_DUTIES_COMMAND)) {
-      init_output_params(false, true);
-    } else if (input_data.startsWith(SWITCH_DEBUG_COMMAND)) {
-      is_debug = !is_debug;
-      uart.print("Debug mode ");
-      uart.println((is_debug) ? "ON" : "OFF");
-    } else if (input_data.startsWith(GET_MIN_PULSES_COMMAND) || input_data.startsWith(GET_MAX_PULSES_COMMAND)) {
-      bool is_min_pulse = input_data.startsWith(GET_MIN_PULSES_COMMAND);
-      uart.print(input_data.buf);
-      uart.println(": ");
-      for (byte i = 0; i < INPUTS_COUNT; ++i) {
-        uart.print(i);
-        uart.print(" ");
-        uart.println(((is_min_pulse) ? settings.min_pulses : settings.max_pulses)[i]);
-      }
-    } else if ((input_data.startsWith(SET_MIN_TEMP_COMMAND)) || input_data.startsWith(SET_MAX_TEMP_COMMAND)) {
-      bool is_max_temp = input_data.startsWith(SET_MAX_TEMP_COMMAND);
-      uart.print((is_max_temp) ? SET_MAX_TEMP_COMMAND : SET_MIN_TEMP_COMMAND);
-      uart.println(": ");
-      bool complete = false;
-      char* params[2];
-      byte split_count = input_data.split(params, ' ');
-      byte temp_value;
-      if (split_count >= 2) {
-        mString<8> param;
-        param.add(params[1]);
-        temp_value = param.toInt();
-        if (is_max_temp) {
-          if ((settings.min_temp < temp_value) && (temp_value < 80)) {
-            settings.max_temp = temp_value;
-            complete = true;
-          }
-        } else if ((10 < temp_value) && (temp_value < settings.max_temp)) {
-          settings.min_temp = temp_value;
-          complete = true;
-        }
-      }
-      if (complete) {
-        uart.print("Temp value ");
-        uart.println(temp_value);
-      } else {
-        uart.println("error");
-      }
-    } else if (input_data.startsWith(SET_MIN_DUTY_COMMAND)) {
-      uart.print(SET_MIN_DUTY_COMMAND);
-      uart.println(": ");
-      bool complete = false;
-      char* params[3];
-      byte split_count = input_data.split(params, ' ');
-      byte output_index;
-      byte duty_value;
-      if (split_count >= 3) {
-        mString<8> param;
-        param.add(params[1]);
-        output_index = param.toInt();
-        param.clear();
-        param.add(params[2]);
-        duty_value = param.toInt();
-        if ((output_index < OUTPUTS_COUNT) && (MIN_DUTY <= duty_value) && (duty_value <= MAX_DUTY)) {
-          settings.min_duties[output_index] = duty_value;
-          complete = true;
-          init_output_params(false, false);
-
-          uart.print("Output ");
-          uart.print(output_index);
-          uart.print(" value ");
-          uart.println(duty_value);
-        }
-      }
-      if (!complete) {
-        uart.println("error");
-      }
-    } else if (input_data.startsWith(SET_MAX_PULSE_COMMAND) || (input_data.startsWith(SET_MIN_PULSE_COMMAND))) {
-      bool is_max_pulse = input_data.startsWith(SET_MAX_PULSE_COMMAND);
-      uart.print(input_data.buf);
-      uart.println(": ");
-      bool complete = false;
-      char* params[3];
-      byte split_count = input_data.split(params, ' ');
-      byte input_index;
-      byte pulse_value;
-      if (split_count >= 3) {
-        mString<8> param;
-        param.add(params[1]);
-        input_index = param.toInt();
-        param.clear();
-        param.add(params[2]);
-        pulse_value = param.toInt();
-        if (input_index < INPUTS_COUNT) {
-          if (is_max_pulse) {
-            if ((settings.min_pulses[input_index] < pulse_value) && (pulse_value <= PULSE_WIDTH)) {
-              settings.max_pulses[input_index] = pulse_value;
-              complete = true;
-            }
-          } else {
-            if ((0 <= pulse_value) && (pulse_value < settings.max_pulses[input_index])) {
-              settings.min_pulses[input_index] = pulse_value;
-              complete = true;
-            }
-          }
-        }
-      }
-      if (complete) {
-        uart.print("Input ");
-        uart.print(input_index);
-        uart.print(" value ");
-        uart.println(pulse_value);
-      } else {
-        uart.println("error");
-      }
-    } else {
-      uart.print("Unexpected command: ");
-      uart.println(input_data.buf);
-    }
-
-    input_data.clear();
-    recieved_flag = false;
-  }
+  read_and_exec_command();
 
   uint32_t time = millis();
   if (cooling_on) {
@@ -663,3 +510,160 @@ byte get_max_by_sensors(bool do_cmd_print) {
   return convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
 }
 
+void read_and_exec_command() {
+  while (uart.available() > 0) {
+    // чтение команды с серийного порта
+    input_data.add((char)uart.read());
+    recieved_flag = true;
+    fixed_delay(20);
+  }
+  if (recieved_flag && input_data.length() > 3) {
+    if (input_data.startsWith(READ_PULSE_COMMAND)) {
+      uart.print(READ_PULSE_COMMAND);
+      uart.println(": ");
+
+      byte pulses[INPUTS_COUNT];
+      read_pulses_into_array(pulses);
+      for (byte i = 0; i < INPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(pulses[i]);
+      }
+    } else if (input_data.startsWith(READ_TEMPS_COMMAND)) {
+      get_max_by_sensors(true);
+    } else if (input_data.startsWith(GET_MIN_TEMP_COMMAND) || input_data.startsWith(GET_MAX_TEMP_COMMAND)) {
+      bool is_min_temp = input_data.startsWith(GET_MIN_TEMP_COMMAND);
+      uart.print(input_data.buf);
+      uart.print(": ");
+      uart.println((is_min_temp) ? settings.min_temp : settings.max_temp);
+    } else if (input_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
+      uart.print(GET_MIN_DUTIES_COMMAND);
+      uart.println(": ");
+      for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(settings.min_duties[i]);
+      }
+    } else if (input_data.startsWith(SAVE_PARAMS_COMMAND)) {
+      uart.print(SAVE_PARAMS_COMMAND);
+      uart.print(": complete");
+      EEPROM.put(0, settings);
+    } else if (input_data.startsWith(RESET_MIN_DUTIES_COMMAND)) {
+      init_output_params(false, true);
+    } else if (input_data.startsWith(SWITCH_DEBUG_COMMAND)) {
+      is_debug = !is_debug;
+      uart.print("Debug mode ");
+      uart.println((is_debug) ? "ON" : "OFF");
+    } else if (input_data.startsWith(GET_MIN_PULSES_COMMAND) || input_data.startsWith(GET_MAX_PULSES_COMMAND)) {
+      bool is_min_pulse = input_data.startsWith(GET_MIN_PULSES_COMMAND);
+      uart.print(input_data.buf);
+      uart.println(": ");
+      for (byte i = 0; i < INPUTS_COUNT; ++i) {
+        uart.print(i);
+        uart.print(" ");
+        uart.println(((is_min_pulse) ? settings.min_pulses : settings.max_pulses)[i]);
+      }
+    } else if ((input_data.startsWith(SET_MIN_TEMP_COMMAND)) || input_data.startsWith(SET_MAX_TEMP_COMMAND)) {
+      bool is_max_temp = input_data.startsWith(SET_MAX_TEMP_COMMAND);
+      uart.print((is_max_temp) ? SET_MAX_TEMP_COMMAND : SET_MIN_TEMP_COMMAND);
+      uart.println(": ");
+      bool complete = false;
+      char* params[2];
+      byte split_count = input_data.split(params, ' ');
+      byte temp_value;
+      if (split_count >= 2) {
+        mString<8> param;
+        param.add(params[1]);
+        temp_value = param.toInt();
+        if (is_max_temp) {
+          if ((settings.min_temp < temp_value) && (temp_value < 80)) {
+            settings.max_temp = temp_value;
+            complete = true;
+          }
+        } else if ((10 < temp_value) && (temp_value < settings.max_temp)) {
+          settings.min_temp = temp_value;
+          complete = true;
+        }
+      }
+      if (complete) {
+        uart.print("Temp value ");
+        uart.println(temp_value);
+      } else {
+        uart.println("error");
+      }
+    } else if (input_data.startsWith(SET_MIN_DUTY_COMMAND)) {
+      uart.print(SET_MIN_DUTY_COMMAND);
+      uart.println(": ");
+      bool complete = false;
+      char* params[3];
+      byte split_count = input_data.split(params, ' ');
+      byte output_index;
+      byte duty_value;
+      if (split_count >= 3) {
+        mString<8> param;
+        param.add(params[1]);
+        output_index = param.toInt();
+        param.clear();
+        param.add(params[2]);
+        duty_value = param.toInt();
+        if ((output_index < OUTPUTS_COUNT) && (MIN_DUTY <= duty_value) && (duty_value <= MAX_DUTY)) {
+          settings.min_duties[output_index] = duty_value;
+          complete = true;
+          init_output_params(false, false);
+
+          uart.print("Output ");
+          uart.print(output_index);
+          uart.print(" value ");
+          uart.println(duty_value);
+        }
+      }
+      if (!complete) {
+        uart.println("error");
+      }
+    } else if (input_data.startsWith(SET_MAX_PULSE_COMMAND) || (input_data.startsWith(SET_MIN_PULSE_COMMAND))) {
+      bool is_max_pulse = input_data.startsWith(SET_MAX_PULSE_COMMAND);
+      uart.print(input_data.buf);
+      uart.println(": ");
+      bool complete = false;
+      char* params[3];
+      byte split_count = input_data.split(params, ' ');
+      byte input_index;
+      byte pulse_value;
+      if (split_count >= 3) {
+        mString<8> param;
+        param.add(params[1]);
+        input_index = param.toInt();
+        param.clear();
+        param.add(params[2]);
+        pulse_value = param.toInt();
+        if (input_index < INPUTS_COUNT) {
+          if (is_max_pulse) {
+            if ((settings.min_pulses[input_index] < pulse_value) && (pulse_value <= PULSE_WIDTH)) {
+              settings.max_pulses[input_index] = pulse_value;
+              complete = true;
+            }
+          } else {
+            if ((0 <= pulse_value) && (pulse_value < settings.max_pulses[input_index])) {
+              settings.min_pulses[input_index] = pulse_value;
+              complete = true;
+            }
+          }
+        }
+      }
+      if (complete) {
+        uart.print("Input ");
+        uart.print(input_index);
+        uart.print(" value ");
+        uart.println(pulse_value);
+      } else {
+        uart.println("error");
+      }
+    } else {
+      uart.print("Unexpected command: ");
+      uart.println(input_data.buf);
+    }
+
+    input_data.clear();
+    recieved_flag = false;
+  }
+}

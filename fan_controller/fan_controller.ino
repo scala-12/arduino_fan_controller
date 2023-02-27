@@ -517,7 +517,7 @@ void read_and_exec_command() {
     recieved_flag = true;
     fixed_delay(20);
   }
-  if (recieved_flag && input_data.length() > 3) {
+  if (recieved_flag && str_length(input_data) > 3) {
     if (input_data.startsWith(READ_PULSE_COMMAND)) {
       uart.print(READ_PULSE_COMMAND);
       uart.println(": ");

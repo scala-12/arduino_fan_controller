@@ -63,3 +63,39 @@ byte find_median(byte* buffer, bool with_simple_avg) {
   for (byte __counter__ = 0; __counter__ < size; ++__counter__) { \
     uart.print((bitRead(bits, __counter__)) ? 1 : 0);             \
   }
+
+// с сайта, но переделанно https://forum.amperka.ru/threads/Подсчёт-числа-символов-в-строке.19457/
+uint16_t str_length(char* source) {
+  int source_len = strlen(source);
+  int result = 0;
+  unsigned char source_char;
+  char m[2] = {'0', '\0'};
+  for (int i = 0; i < source_len; ++i, ++result) {
+    source_char = source[i];
+
+    if (source_char >= 0xBF) {
+      if (source_char == 0xD0) {
+        ++i;
+        if (source[i] == 0x81) {
+          source_char = 0xA8;
+        } else if (source[i] >= 0x90 && source[i] <= 0xBF) {
+          source_char = source[i] + 0x2F;
+        } else {
+          source_char = source[i];
+        }
+      } else if (source_char == 0xD1) {
+        ++i;
+        if (source[i] == 0x91) {
+          source_char = 0xB7;
+        } else if (source[i] >= 0x80 && source[i] <= 0x8F) {
+          source_char = source[i] + 0x6F;
+        } else {
+          source_char = source[i];
+        }
+      }
+    }
+    m[0] = source_char;
+  }
+
+  return result;
+}

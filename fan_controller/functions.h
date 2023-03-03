@@ -1,3 +1,6 @@
+#ifndef FUNCTIONS_FILE_INCLUDED
+#define FUNCTIONS_FILE_INCLUDED
+
 // from Alex Gyver site
 bool digital_read_fast(uint8_t pin) {
   if (pin < 8) {
@@ -58,12 +61,6 @@ byte find_median(byte* buffer, bool with_simple_avg) {
   return find_median<SIZE>(buffer, (with_simple_avg) ? 1 : 0, false);
 }
 
-#define convert_by_sqrt(x, min_x, max_x, min_y, max_y) map(sqrt(map(constrain(x, min_x, max_x), min_x, max_x, 0, 900)), 0, 30, min_y, max_y)
-#define print_bits(bits, size)                                    \
-  for (byte __counter__ = 0; __counter__ < size; ++__counter__) { \
-    uart.print((bitRead(bits, __counter__)) ? 1 : 0);             \
-  }
-
 // с сайта, но переделанно https://forum.amperka.ru/threads/Подсчёт-числа-символов-в-строке.19457/
 uint16_t str_length(char* source) {
   int source_len = strlen(source);
@@ -99,3 +96,5 @@ uint16_t str_length(char* source) {
 
   return result;
 }
+
+#endif

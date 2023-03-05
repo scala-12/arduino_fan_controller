@@ -51,18 +51,30 @@ const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество �
 const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
 
 // переменные
-byte smooth_buffer[INPUTS_COUNT][BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
+
+struct InputsInfo {
+  struct {
+    byte smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
+    byte value;                                   // последнее значение PWM для отрисовки на матрице
+  } pulses_info[INPUTS_COUNT];
+  byte smooth_index;                              // шаг для сглаживания
+  mString<3 * INPUTS_COUNT> str_pulses_values;    // строка с значениями входящих ШИМ
+  mString<3 * SENSORS_COUNT> str_sensors_values;  // строка с значениями датчиков температуры
+  byte sensors_values[SENSORS_COUNT];             // значения датчтков температуры
+  byte pwm_percent_by_pulse;
+  byte pwm_percent_by_sensor;
+};
+InputsInfo inputs_info;
+
 // TODO проверить нужен ли кеш или вычислять на ходу
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
 
-MicroUART uart;          // интерфейс работы с серийным портом
-byte smooth_index;       // шаг для сглаживания
-bool cooling_on;         // режим максимальной скорости
-uint32_t pwm_tmr;        // таймер для чтения ШИМ
-mString<64> input_data;  // буфер чтения команды из серийного порта
-boolean recieved_flag;   // флаг на чтение
-boolean is_debug;        // флаг вывода технической информации
-byte last_percent;       // последнее значение PWM для отрисовки на матрице
+MicroUART uart;         // интерфейс работы с серийным портом
+bool cooling_on;        // режим максимальной скорости
+uint32_t pwm_tmr;       // таймер для чтения ШИМ
+mString<64> cmd_data;   // буфер чтения команды из серийного порта
+boolean recieved_flag;  // флаг на чтение
+boolean is_debug;       // флаг вывода технической информации
 
 struct Settings {
   byte min_duties[OUTPUTS_COUNT];  // минимальный PWM для начала вращения
@@ -87,12 +99,12 @@ void MU_serialEvent() {
 
 void setup() {
   uart.begin(SERIAL_SPEED);
-  uart.println("start");
+  uart.println(F("start"));
 
   pinMode(COOLING_PIN, INPUT_PULLUP);
   for (byte i = 0; i < INPUTS_COUNT; ++i) {
     pinMode(INPUTS_PINS[i], INPUT);
-    memset(smooth_buffer[i], 0, BUFFER_SIZE_FOR_SMOOTH);
+    memset(inputs_info.pulses_info[i].smooths_buffer, 0, BUFFER_SIZE_FOR_SMOOTH);
   }
   for (byte i = 0; i < SENSORS_COUNT; ++i) {
     MicroDS18B20<> sensor(SENSORS_PINS[i]);
@@ -102,10 +114,10 @@ void setup() {
   // обнуляем таймеры
   pwm_tmr = 0;
 
-  smooth_index = 0;    // номер шага в буфере для сглаживания
-  cooling_on = false;  // не режим продувки
-  input_data = "";     // ощищаем буфер
-  is_debug = false;    // не дебаг
+  inputs_info.smooth_index = 0;  // номер шага в буфере для сглаживания
+  cooling_on = false;            // не режим продувки
+  cmd_data = "";                 // ощищаем буфер
+  is_debug = false;              // не дебаг
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
@@ -129,32 +141,30 @@ void setup() {
 }
 
 void loop() {
-  read_and_exec_command(settings);
+  read_and_exec_command(settings, inputs_info, cmd_data, is_debug);
 
   uint32_t time = millis();
   if (cooling_on) {
     if (digitalRead(COOLING_PIN) == LOW) {
       cooling_on = false;
-      uart.println("cooling OFF");
+      uart.println(F("cooling OFF"));
     }
   } else if (digitalRead(COOLING_PIN) == HIGH) {
     cooling_on = true;
     apply_pwm_4all(100);
-    uart.println("cooling ON");
-  } else if (check_diff(time, pwm_tmr, REFRESH_TIMEOUT)) {
+    uart.println(F("cooling ON"));
+  } else if (check_diff(time, pwm_tmr, PWM_READ_TIMEOUT)) {
     pwm_tmr = time;
-    byte max_percent_by_pwm = get_max_percent_by_pwm();
+    read_pulses(inputs_info, is_debug);
+    read_temps(settings, inputs_info, is_debug);
+    byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_sensor);
 
-    byte max_percent_by_sensors;
-    set_max_percent_of_temp(settings, is_debug, max_percent_by_sensors);
-    last_percent = max(max_percent_by_pwm, max_percent_by_sensors);
-
-    apply_pwm_4all(last_percent);
+    apply_pwm_4all(max_percent);
   }
 }
 
 boolean has_rpm(byte index, byte more_than_rpm = 0) {
-  uart.print("fan ");
+  uart.print(F("fan "));
   uart.print(get_out_pin(index));
 
   unsigned long rpm = pulseIn(get_rpm_pin(index), HIGH, 500000);
@@ -190,7 +200,7 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
   byte _i = 0;
   byte max_count_index = 20;
   for (; ((running_bits | ignored_bits) != complete_bits) && (_i < max_count_index || wait_stop); ++_i) {
-    uart.print("stop fans, ");
+    uart.print(F("stop fans, "));
     uart.print(_i);
     uart.print(": ");
     print_bits(running_bits, OUTPUTS_COUNT);
@@ -212,9 +222,9 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
   }
 
   if (wait_stop || _i < max_count_index) {
-    uart.print("stopped ");
+    uart.print(F("stopped "));
   } else {
-    uart.print("not stopped ");
+    uart.print(F("not stopped "));
   }
 
   print_bits(running_bits, OUTPUTS_COUNT);
@@ -256,7 +266,7 @@ void init_output_params(bool is_first, bool init_rpm) {
         settings.min_duties[i] = MIN_DUTY;
         uart.print("fan ");
         uart.print(get_out_pin(i));
-        uart.println(" without RPM");
+        uart.println(F(" without RPM"));
       } else {
         settings.min_duties[i] = MAX_DUTY;
         start_duties[i] = MIN_DUTY;
@@ -279,7 +289,7 @@ void init_output_params(bool is_first, bool init_rpm) {
           if (!bitRead(ignored_bits, i)) {
             uart.print("fan ");
             uart.print(get_out_pin(i));
-            uart.print(" binary search min duty [");
+            uart.print(F(" binary search min duty ["));
             uart.print(start_duties[i]);
             uart.print(", ");
             uart.print(settings.min_duties[i]);
@@ -297,7 +307,7 @@ void init_output_params(bool is_first, bool init_rpm) {
       byte ready_bits = ignored_bits;
       for (byte _i = 0; _i < MAX_DUTY && (ready_bits != complete_bits); ++_i) {
         uart.print(_i);
-        uart.print(", search step-by-step min duty ");
+        uart.print(F(", search step-by-step min duty "));
         print_bits(ready_bits, OUTPUTS_COUNT);
         uart.print(" != ");
         print_bits(complete_bits, OUTPUTS_COUNT);
@@ -333,7 +343,7 @@ void init_output_params(bool is_first, bool init_rpm) {
               bitSet(ready_bits, i);
               uart.print("fan ");
               uart.print(get_out_pin(i));
-              uart.print(" min duty ");
+              uart.print(F(" min duty "));
               uart.println(settings.min_duties[i]);
             }
           }
@@ -354,7 +364,7 @@ void init_output_params(bool is_first, bool init_rpm) {
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-    uart.print("values for ");
+    uart.print(F("values for "));
     uart.print(get_out_pin(i));
     uart.println(":");
     for (byte p = 0, j = 0; p <= 100; ++p, ++j) {
@@ -374,9 +384,9 @@ void init_output_params(bool is_first, bool init_rpm) {
 void apply_fan_pwm(byte index, byte duty) {
   PWM_set(get_out_pin(index), duty);
   if (is_debug) {
-    uart.print("Fan ");
+    uart.print(F("Fan "));
     uart.print(get_out_pin(index));
-    uart.print(", duty ");
+    uart.print(F(", duty "));
     uart.println(duty);
   }
 }

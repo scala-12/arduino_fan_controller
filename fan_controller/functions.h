@@ -12,21 +12,15 @@ bool digital_read_fast(uint8_t pin) {
   }
 }
 
-template <byte SIZE>
-byte find_median(byte buffer[SIZE], byte avarage_radius, bool do_sort) {
-  byte* sorted;
-  if (do_sort) {
-    sorted = buffer;
-  } else {
-    byte buffer_copy[SIZE];
-    for (byte i = 0; i < SIZE; ++i) {
-      buffer_copy[i] = buffer[i];
-    }
-    sorted = buffer_copy;
+template <byte SIZE, typename T>
+T find_median(T buffer[SIZE], byte avarage_radius, bool do_sort) {
+  T sorted[SIZE];
+  for (byte i = 0; i < SIZE; ++i) {
+    sorted[i] = buffer[i];
   }
 
-  for (int j = 0; j < SIZE; ++j) {
-    byte temp = sorted[j];
+  for (byte j = 0; j < SIZE; ++j) {
+    T temp = sorted[j];
     byte ind = j;
     for (byte i = j + 1; i < SIZE; ++i) {
       if (temp > sorted[i]) {
@@ -43,22 +37,29 @@ byte find_median(byte buffer[SIZE], byte avarage_radius, bool do_sort) {
     return sorted[middle_index];
   }
 
-  int sum = sorted[middle_index];
+  float sum = sorted[middle_index];
   for (byte i = 1; i <= avarage_radius; ++i) {
-    sum += sorted[middle_index + i] + sorted[middle_index - i];
+    sum += (sorted[middle_index + i] - sum) * 0.2;
+    sum += (sorted[middle_index - i] - sum) * 0.2;
   }
 
-  return sum / ((avarage_radius << 1) + 1);
+  if (do_sort) {
+    for (byte i = 0; i < SIZE; ++i) {
+      buffer[i] = sorted[i];
+    }
+  }
+
+  return sum;
 }
 
-template <byte SIZE>
-byte find_median(byte* buffer) {
-  return find_median<SIZE>(buffer, 0, false);
+template <byte SIZE, typename T>
+T find_median(T buffer[SIZE]) {
+  return find_median<SIZE, T>(buffer, 0, false);
 }
 
-template <byte SIZE>
-byte find_median(byte* buffer, bool with_simple_avg) {
-  return find_median<SIZE>(buffer, (with_simple_avg) ? 1 : 0, false);
+template <byte SIZE, typename T>
+T find_median(T buffer[SIZE], bool with_simple_avg) {
+  return find_median<SIZE, T>(buffer, (with_simple_avg) ? 1 : 0, false);
 }
 
 // с сайта, но переделанно https://forum.amperka.ru/threads/Подсчёт-числа-символов-в-строке.19457/
@@ -95,6 +96,20 @@ uint16_t str_length(char* source) {
   }
 
   return result;
+}
+
+byte find_char_count(String data, char letter) {
+  uint16_t from = 0;
+  byte counter = 0;
+  for (int i = 0; i != -1;) {
+    i = data.indexOf(letter, from);
+    if (i != -1) {
+      from = i + 1;
+      ++counter;
+    }
+  }
+
+  return counter;
 }
 
 #endif

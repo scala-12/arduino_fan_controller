@@ -47,6 +47,8 @@ const byte SENSORS_PINS[] = {6, 7};                                 // пины 
 
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
 
+#define OPTICAL_SENSOR_PIN A5 /* пин оптического энкодера */
+
 #define MTRX_CS_PIN 12    /*CS-пин матрицы*/
 #define MTRX_CLOCK_PIN 13 /*Clk-пин матрицы*/
 #define MTRX_DATA_PIN A0  /*DIn-пин матрицы*/
@@ -76,6 +78,14 @@ struct InputsInfo {
   byte sensors_values[SENSORS_COUNT];             // значения датчтков температуры
   byte pwm_percent_by_pulse;
   byte pwm_percent_by_sensor;
+  byte pwm_percent_by_optic;
+  struct {
+    byte pin;
+    bool state;
+    int counter;
+    int rpm;
+    int smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];
+  } optical;
 };
 InputsInfo inputs_info;
 
@@ -101,6 +111,8 @@ struct Settings {
   byte max_pulses[INPUTS_COUNT];   // верхняя граница чувствительности к входящему PWM
   byte max_temp;                   // верхняя граница чувсвительности температурного датчика
   byte min_temp;                   // нижняя граница чувсвительности температурного датчика
+  int max_optic_rpm;               // верхняя граница чувсвительности оптического датчика
+  int min_optic_rpm;               // нижняя граница чувсвительности оптического датчика
 };
 Settings settings;  // хранимые параметры
 
@@ -160,6 +172,13 @@ void setup() {
     ctrl_keys.setWindow(200);
   }
 
+  inputs_info.optical.pin = OPTICAL_SENSOR_PIN;
+  pinMode(inputs_info.optical.pin, INPUT);
+  inputs_info.optical.counter = 0;
+  inputs_info.optical.rpm = 0;
+  inputs_info.optical.state = false;
+  memset(inputs_info.optical.smooths_buffer, 0, BUFFER_SIZE_FOR_SMOOTH);
+
   mtrx.panel.begin();
   mtrx.panel.setBright(MTRX_BRIGHT);
   mtrx.panel.textDisplayMode(GFX_REPLACE);
@@ -177,6 +196,8 @@ void setup() {
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
+    settings.max_optic_rpm = DEFAULT_MAX_OPTIC_RPM;
+    settings.min_optic_rpm = DEFAULT_MIN_OPTIC_RPM;
     settings.max_temp = DEFAULT_MAX_TEMP;
     settings.min_temp = DEFAULT_MIN_TEMP;
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
@@ -201,6 +222,12 @@ void loop() {
   read_and_exec_command(settings, inputs_info, cmd_data, is_debug, mtrx);
 
   uint32_t time = millis();
+  if (inputs_info.optical.state != digital_read_fast(inputs_info.optical.pin)) {
+    inputs_info.optical.state = !inputs_info.optical.state;
+    if (inputs_info.optical.state) {
+      ++inputs_info.optical.counter;
+    }
+  }
 
   ticks_over = true;
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
@@ -265,9 +292,16 @@ void loop() {
     uart.println(F("cooling OFF"));
   } else if (check_diff(time, pwm_tmr, PWM_READ_TIMEOUT)) {
     pwm_tmr = time;
+
+    inputs_info.optical.smooths_buffer[inputs_info.smooth_index] = inputs_info.optical.counter;
+    inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, int>(inputs_info.optical.smooths_buffer, true) * PWM_READ_HZ * 60;
+    inputs_info.optical.counter = 0;
+    inputs_info.pwm_percent_by_optic = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
+
     read_pulses(inputs_info, is_debug);
     read_temps(settings, inputs_info, is_debug);
     byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_sensor);
+    max_percent = max(max_percent, inputs_info.pwm_percent_by_optic);
 
     apply_pwm_4all(max_percent);
   }

@@ -201,14 +201,20 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
       uart.print(": ");
       uart.println(inputs_info.str_pulses_values.buf);
       set_matrix_text(mtrx, inputs_info.str_sensors_values.buf);
-    } else if (cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MAX_TEMP_COMMAND)) {
-      bool is_min_temp = cmd_data.startsWith(GET_MIN_TEMP_COMMAND);
-      uart.print((is_min_temp) ? GET_MIN_TEMP_COMMAND : GET_MAX_TEMP_COMMAND);
+    } else if (cmd_data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
+      uart.print(SHOW_OPTICAL_COUNTER_COMMAND);
       uart.print(": ");
-      uart.println((is_min_temp) ? settings.min_temp : settings.max_temp);
-      set_matrix_text(mtrx, "T");
-      add_matrix_text(mtrx, (is_min_temp) ? "v" : "^");
-      add_matrix_text_n_space_before(mtrx, (is_min_temp) ? settings.min_temp : settings.max_temp, true);
+      uart.println(inputs_info.optical.rpm);
+      set_matrix_text(mtrx, inputs_info.optical.rpm);
+    } else if (cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MAX_TEMP_COMMAND) || cmd_data.startsWith(GET_MIN_OPTICAL_COMMAND) || cmd_data.startsWith(GET_MAX_OPTICAL_COMMAND)) {
+      bool is_min = cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MIN_OPTICAL_COMMAND);
+      bool is_temp = cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MAX_TEMP_COMMAND);
+      uart.print((is_min) ? ((is_temp) ? GET_MIN_TEMP_COMMAND : GET_MIN_OPTICAL_COMMAND) : ((is_temp) ? GET_MAX_TEMP_COMMAND : GET_MAX_OPTICAL_COMMAND));
+      uart.print(": ");
+      uart.println((is_min) ? settings.min_temp : settings.max_temp);
+      set_matrix_text(mtrx, (is_temp) ? "T" : "O");
+      add_matrix_text(mtrx, (is_min) ? "v" : "^");
+      add_matrix_text_n_space_before(mtrx, (is_min) ? ((is_temp) ? settings.min_temp : settings.min_optic_rpm) : ((is_temp) ? settings.max_temp : settings.max_optic_rpm), true);
     } else if (cmd_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
       uart.print(GET_MIN_DUTIES_COMMAND);
       uart.print(": ");
@@ -234,34 +240,44 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
       uart.print(": ");
       uart.println(values.buf);
       set_matrix_text(mtrx, values.buf);
-    } else if ((cmd_data.startsWith(SET_MIN_TEMP_COMMAND)) || cmd_data.startsWith(SET_MAX_TEMP_COMMAND)) {
-      bool is_max_temp = cmd_data.startsWith(SET_MAX_TEMP_COMMAND);
-      uart.print((is_max_temp) ? SET_MAX_TEMP_COMMAND : SET_MIN_TEMP_COMMAND);
+    } else if ((cmd_data.startsWith(SET_MIN_TEMP_COMMAND)) || cmd_data.startsWith(SET_MAX_TEMP_COMMAND) || (cmd_data.startsWith(SET_MIN_OPTICAL_COMMAND)) || cmd_data.startsWith(SET_MAX_OPTICAL_COMMAND)) {
+      bool is_min = cmd_data.startsWith(SET_MIN_TEMP_COMMAND) || cmd_data.startsWith(SET_MIN_OPTICAL_COMMAND);
+      bool is_temp = cmd_data.startsWith(SET_MIN_TEMP_COMMAND) || cmd_data.startsWith(SET_MAX_TEMP_COMMAND);
+
+      uart.print((is_min) ? ((is_temp) ? SET_MIN_TEMP_COMMAND : SET_MIN_OPTICAL_COMMAND) : ((is_temp) ? SET_MAX_TEMP_COMMAND : SET_MAX_OPTICAL_COMMAND));
       uart.println(": ");
       bool complete = false;
       char* params[2];
       byte split_count = cmd_data.split(params, ' ');
-      byte temp_value;
+      int value;
       if (split_count >= 2) {
         mString<8> param;
         param.add(params[1]);
-        temp_value = param.toInt();
-        if (is_max_temp) {
-          if ((settings.min_temp < temp_value) && (temp_value <= MAX_TEMP_VALUE)) {
-            settings.max_temp = temp_value;
+        value = param.toInt();
+        if (is_min) {
+          if ((is_temp && value > MIN_TEMP_VALUE && value < settings.max_temp) || (!is_temp && value >= MIN_OPTIC_RPM_VALUE && value < settings.max_optic_rpm)) {
+            if (is_temp) {
+              settings.min_temp = value;
+            } else {
+              settings.min_optic_rpm = value;
+            }
             complete = true;
           }
-        } else if ((MIN_TEMP_VALUE <= temp_value) && (temp_value < settings.max_temp)) {
-          settings.min_temp = temp_value;
+        } else if ((is_temp && settings.min_temp < value && value < MAX_TEMP_VALUE) || (!is_temp && value > settings.min_optic_rpm && value <= MAX_OPTIC_RPM_VALUE)) {
+          if (is_temp) {
+            settings.max_temp = value;
+          } else {
+            settings.max_optic_rpm = value;
+          }
           complete = true;
         }
       }
       if (complete) {
-        uart.print(F("Temp value "));
-        uart.println(temp_value);
-        set_matrix_text(mtrx, "T");
-        add_matrix_text(mtrx, (is_max_temp) ? "^" : "v");
-        add_matrix_text_n_space_before(mtrx, temp_value, true);
+        uart.print((is_temp) ? F("Temp value ") : F("Optical conter value "));
+        uart.println(value);
+        set_matrix_text(mtrx, (is_temp) ? "T" : "O");
+        add_matrix_text(mtrx, (is_min) ? "v" : "^");
+        add_matrix_text_n_space_before(mtrx, value, true);
       } else {
         set_matrix_text(mtrx, "error");
         uart.println("error");
@@ -686,6 +702,13 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             }
             break;
           }
+          case OPTIC_MENU_1: {
+            if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
+              ((menu.cursor[2] == OPTIC_MENU_1_MIN_2) ? (settings.min_optic_rpm) : settings.max_optic_rpm) = mtrx.data.toInt();
+              go_back = true;
+            }
+            break;
+          }
         }
         if (go_back) {
           back_menu(menu);
@@ -732,6 +755,10 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
           switch (menu.cursor[1]) {
             case TEMP_MENU_1: {
               go_next = menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2;
+              break;
+            }
+            case OPTIC_MENU_1: {
+              go_next = menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2;
               break;
             }
           }
@@ -784,6 +811,14 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             }
             break;
           }
+          case OPTIC_MENU_1: {
+            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              bitSet(direction, 0);
+            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < OPTIC_MENU_1_COUNT - 1) {
+              bitSet(direction, 1);
+            }
+            break;
+          }
           case DUTIES_MENU_1: {
             if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
@@ -822,6 +857,19 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
                 mtrx.data.clear();
                 mtrx.data.add(value + 1);
               } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == TEMP_MENU_1_MIN_2 && value > MIN_TEMP_VALUE) || (menu.cursor[2] == TEMP_MENU_1_MAX_2 && value > settings.min_temp + 1))) {
+                mtrx.data.clear();
+                mtrx.data.add(value - 1);
+              }
+            }
+            break;
+          }
+          case OPTIC_MENU_1: {
+            if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
+              int value = mtrx.data.toInt();
+              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == OPTIC_MENU_1_MIN_2 && value < settings.max_optic_rpm - 1) || (menu.cursor[2] == OPTIC_MENU_1_MAX_2 && value < MAX_OPTIC_RPM_VALUE))) {
+                mtrx.data.clear();
+                mtrx.data.add(value + 1);
+              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == OPTIC_MENU_1_MIN_2 && value > MIN_OPTIC_RPM_VALUE) || (menu.cursor[2] == OPTIC_MENU_1_MAX_2 && value > settings.min_optic_rpm + 1))) {
                 mtrx.data.clear();
                 mtrx.data.add(value - 1);
               }
@@ -918,6 +966,10 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               caption = "temp";
               break;
             }
+            case OPTIC_MENU_1: {
+              caption = "optic";
+              break;
+            }
             case DUTIES_MENU_1: {
               caption = "outs";
               break;
@@ -973,6 +1025,24 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
+            case OPTIC_MENU_1: {
+              switch (menu.cursor[menu.level]) {
+                case SHOW_PARAM_VALUE: {
+                  caption.add(inputs_info.optical.rpm);
+                  menu.everytime_refresh = true;
+                  break;
+                }
+                case OPTIC_MENU_1_MIN_2: {
+                  caption = "min";
+                  break;
+                }
+                case OPTIC_MENU_1_MAX_2: {
+                  caption = "max";
+                  break;
+                }
+              }
+              break;
+            }
             case DUTIES_MENU_1: {
               switch (menu.cursor[menu.level]) {
                 case SHOW_PARAM_VALUE: {
@@ -983,11 +1053,16 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                       caption.add(0);
                     }
                     caption.add(inputs_info.pwm_percent_by_pulse);
-                    caption.add("/");
+                    caption.add(" ");
                     if (inputs_info.pwm_percent_by_sensor < 10) {
                       caption.add(0);
                     }
                     caption.add(inputs_info.pwm_percent_by_sensor);
+                    caption.add(" ");
+                    if (inputs_info.pwm_percent_by_optic < 10) {
+                      caption.add(0);
+                    }
+                    caption.add(inputs_info.pwm_percent_by_optic);
                   }
 
                   menu.everytime_refresh = true;
@@ -1037,6 +1112,27 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                 }
                 byte value = mtrx.data.toInt();
                 if (value < 10) {
+                  caption.add(0);
+                }
+                caption.add(value);
+                menu.everytime_refresh = true;
+              }
+              break;
+            }
+            case OPTIC_MENU_1: {
+              if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
+                if (mtrx.data.startsWith("min") || mtrx.data.startsWith("max")) {
+                  mtrx.data.clear();
+                  mtrx.data.add((menu.cursor[2] == OPTIC_MENU_1_MIN_2) ? settings.min_optic_rpm : settings.max_optic_rpm);
+                }
+                int value = mtrx.data.toInt();
+                if (value < 10) {
+                  caption.add(0);
+                }
+                if (value < 100) {
+                  caption.add(0);
+                }
+                if (value < 1000) {
                   caption.add(0);
                 }
                 caption.add(value);

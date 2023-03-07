@@ -15,12 +15,16 @@
 #define DEFAULT_MAX_PERCENT 65                /* верхняя граница чувствительности к входящему PWM */
 #define DEFAULT_MIN_TEMP 28                   /* нижняя граница чувсвительности температурного датчика */
 #define DEFAULT_MAX_TEMP 38                   /* верхняя граница чувсвительности температурного датчика */
+#define DEFAULT_MIN_OPTIC_RPM 0               /* нижняя граница чувствительности оптического датчика */
+#define DEFAULT_MAX_OPTIC_RPM 1500            /* верхняя граница чувствительности оптического датчика */
+#define MAX_OPTIC_RPM_VALUE 5000              /* максимальное значение для оптического датчика */
+#define MIN_OPTIC_RPM_VALUE 0                 /* минимальное значение для оптического датчика */
 #define MAX_TEMP_VALUE 50                     /* максимальное значение для датчика температуры */
 #define MIN_TEMP_VALUE 10                     /* минимальное значение для датчика температуры */
 #define SERIAL_SPEED 115200                   /* скорость серийного порта */
 #define PWM_READ_TIMEOUT 2000                 /* таймаут чтения входящего ЩИМ */
 #define PWM_READ_HZ (1000 / PWM_READ_TIMEOUT) /* частота чтения входящего ЩИМ */
-#define VERSION_NUMBER 4                      /* версия структуры данных, хранящихся в памяти */
+#define VERSION_NUMBER 5                      /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023                        /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6                        /* пин включения максимальной скорости */
@@ -45,10 +49,15 @@
 
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMPS_COMMAND "show_temps"
+#define SHOW_OPTICAL_COUNTER_COMMAND "show_optic"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"
 #define SET_MAX_TEMP_COMMAND "set_max_temp"
 #define GET_MIN_TEMP_COMMAND "get_min_temp"
 #define GET_MAX_TEMP_COMMAND "get_max_temp"
+#define SET_MIN_OPTICAL_COMMAND "set_min_optical"
+#define SET_MAX_OPTICAL_COMMAND "set_max_optical"
+#define GET_MIN_OPTICAL_COMMAND "get_min_optical"
+#define GET_MAX_OPTICAL_COMMAND "get_max_optical"
 #define GET_MIN_PULSES_COMMAND "get_min_pulses"
 #define GET_MAX_PULSES_COMMAND "get_max_pulses"
 #define SAVE_PARAMS_COMMAND "save_params"

@@ -17,15 +17,19 @@
 [?][1][0] актуальное значение
 [?][1][1] min
 [?][1][2] max
-[?][2] output
+[?][2] optic
 [?][2][0] актуальное значение
 [?][2][1] min
-[?][2][1][0] актуальное значение
-[?][2][1][x] set x
-[?][2][1][x][?] настройка x
-[?][3] settings
-[?][3][0] reset min outs
-[?][3][1] commit
+[?][2][2] max
+[?][3] output
+[?][3][0] актуальное значение
+[?][3][1] min
+[?][3][1][0] актуальное значение
+[?][3][1][x] set x
+[?][3][1][x][?] настройка x
+[?][4] settings
+[?][4][0] reset min outs
+[?][4][1] commit
 */
 #define SHOW_PARAM_VALUE 0
 #define PULSES_MENU_1 0
@@ -36,14 +40,18 @@
 #define TEMP_MENU_1_MIN_2 1
 #define TEMP_MENU_1_MAX_2 2
 #define TEMP_MENU_1_COUNT 3
-#define DUTIES_MENU_1 2
+#define OPTIC_MENU_1 2
+#define OPTIC_MENU_1_MIN_2 1
+#define OPTIC_MENU_1_MAX_2 2
+#define OPTIC_MENU_1_COUNT 3
+#define DUTIES_MENU_1 3
 #define DUTIES_MENU_1_MIN_2 1
 #define DUTIES_MENU_1_COUNT 2
-#define SETS_MENU_1 3
+#define SETS_MENU_1 4
 #define SETS_MENU_1_RESET_OUT_2 0
 #define SETS_MENU_1_COMMIT_2 1
 #define SETS_MENU_1_COUNT 2
-#define MENU_1_COUNT 4
+#define MENU_1_COUNT 5
 #define MENU_LEVELS 5
 
 #define MENU_TIMEOUT 10240

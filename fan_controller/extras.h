@@ -233,6 +233,12 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
       msg.add((is_debug) ? F("Debug mode ON") : F("Debug mode OFF"));
       uart.println(msg.buf);
       set_matrix_text(mtrx, msg.buf);
+    } else if (cmd_data.startsWith(SWITCH_COOLING_HOLD_COMMAND)) {
+      settings.cool_on_hold = !settings.cool_on_hold;
+      mString<16> msg;
+      msg.add((settings.cool_on_hold) ? F("Cooling on HOLD") : F("Ctrl on HOLD"));
+      uart.println(msg.buf);
+      set_matrix_text(mtrx, msg.buf);
     } else if (cmd_data.startsWith(GET_MIN_PULSES_COMMAND) || cmd_data.startsWith(GET_MAX_PULSES_COMMAND)) {
       bool is_min_pulse = cmd_data.startsWith(GET_MIN_PULSES_COMMAND);
       mString<3 * INPUTS_COUNT> values = get_pulses_settings(is_min_pulse);
@@ -375,7 +381,7 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
 void save_settings(Settings settings, Max7219Matrix& mtrx) {
   Settings saved_sets;
   EEPROM.get(0, saved_sets);
-  bool changed = saved_sets.max_temp != settings.max_temp || saved_sets.min_temp != settings.min_temp;
+  bool changed = saved_sets.max_temp != settings.max_temp || saved_sets.min_temp != settings.min_temp || saved_sets.cool_on_hold != settings.cool_on_hold;
   for (byte i = 0; i < OUTPUTS_COUNT && !changed; ++i) {
     if (saved_sets.min_duties[i] != settings.min_duties[i]) {
       changed = true;
@@ -709,6 +715,13 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             }
             break;
           }
+          case SETS_MENU_1: {
+            if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
+              settings.cool_on_hold = menu.cursor[3] == 1;
+              go_back = true;
+            }
+            break;
+          }
         }
         if (go_back) {
           back_menu(menu);
@@ -759,6 +772,13 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             }
             case OPTIC_MENU_1: {
               go_next = menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2;
+              break;
+            }
+            case SETS_MENU_1: {
+              if (menu.cursor[menu.level] == SETS_MENU_1_HOLD_COOL_2) {
+                go_next = true;
+                next_index = (settings.cool_on_hold) ? 1 : 0;
+              }
               break;
             }
           }
@@ -881,6 +901,16 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
               if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
                 bitSet(direction, 0);
               } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < OUTPUTS_COUNT) {
+                bitSet(direction, 1);
+              }
+            }
+            break;
+          }
+          case SETS_MENU_1: {
+            if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
+              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+                bitSet(direction, 0);
+              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < 1) {
                 bitSet(direction, 1);
               }
             }
@@ -1077,6 +1107,10 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
             }
             case SETS_MENU_1: {
               switch (menu.cursor[menu.level]) {
+                case SETS_MENU_1_HOLD_COOL_2: {
+                  caption = "hold cool";
+                  break;
+                }
                 case SETS_MENU_1_RESET_OUT_2: {
                   caption = "reset ctrl";
                   break;
@@ -1147,6 +1181,16 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                 } else {
                   caption = "set ";
                   caption.add(menu.cursor[menu.level]);
+                }
+              }
+              break;
+            }
+            case SETS_MENU_1: {
+              if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
+                if (menu.cursor[menu.level] == 0) {
+                  caption.add("false");
+                } else {
+                  caption.add("true");
                 }
               }
               break;

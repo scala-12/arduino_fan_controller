@@ -113,6 +113,7 @@ struct Settings {
   byte min_temp;                   // нижняя граница чувсвительности температурного датчика
   int max_optic_rpm;               // верхняя граница чувсвительности оптического датчика
   int min_optic_rpm;               // нижняя граница чувсвительности оптического датчика
+  bool cool_on_hold;               // состояние кнопки для активации режима продувки
 };
 Settings settings;  // хранимые параметры
 
@@ -196,6 +197,7 @@ void setup() {
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
+    settings.cool_on_hold = true;
     settings.max_optic_rpm = DEFAULT_MAX_OPTIC_RPM;
     settings.min_optic_rpm = DEFAULT_MIN_OPTIC_RPM;
     settings.max_temp = DEFAULT_MAX_TEMP;
@@ -281,7 +283,9 @@ void loop() {
 
   menu_refresh(settings, inputs_info, time, mtrx, menu);
   mtrx_refresh(mtrx, time);
-  if (cooling_buttons[0].tick(cooling_keys.status(0)) == 6 || (cooling_buttons[0].tick(cooling_keys.status(0)) == 7 && cooling_buttons[0].busy())) {
+  byte cool_button_state = cooling_buttons[0].tick(cooling_keys.status(0));
+  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_buttons[0].busy());
+  if (settings.cool_on_hold == is_hold_button) {
     if (!cooling_on) {
       cooling_on = true;
       apply_pwm_4all(100);

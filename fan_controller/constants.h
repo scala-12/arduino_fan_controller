@@ -24,7 +24,7 @@
 #define SERIAL_SPEED 115200                   /* скорость серийного порта */
 #define PWM_READ_TIMEOUT 2000                 /* таймаут чтения входящего ЩИМ */
 #define PWM_READ_HZ (1000 / PWM_READ_TIMEOUT) /* частота чтения входящего ЩИМ */
-#define VERSION_NUMBER 5                      /* версия структуры данных, хранящихся в памяти */
+#define VERSION_NUMBER 6                      /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023                        /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6                        /* пин включения максимальной скорости */
@@ -67,6 +67,7 @@
 #define SET_MIN_DUTY_COMMAND "set_min_duty"
 #define GET_MIN_DUTIES_COMMAND "get_min_duties"
 #define SWITCH_DEBUG_COMMAND "switch_debug"
+#define SWITCH_COOLING_HOLD_COMMAND "switch_cooling_hold"
 // ^^^ системные переменные, нельзя менять ^^^
 
 #endif

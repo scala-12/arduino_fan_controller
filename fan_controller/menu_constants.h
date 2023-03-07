@@ -28,8 +28,11 @@
 [?][3][1][x] set x
 [?][3][1][x][?] настройка x
 [?][4] settings
-[?][4][0] reset min outs
-[?][4][1] commit
+[?][4][0] cool_on_hold
+[?][4][0][0] текущее значение == false
+[?][4][0][1] текущее значение == true
+[?][4][1] reset min outs
+[?][4][2] commit
 */
 #define SHOW_PARAM_VALUE 0
 #define PULSES_MENU_1 0
@@ -48,9 +51,10 @@
 #define DUTIES_MENU_1_MIN_2 1
 #define DUTIES_MENU_1_COUNT 2
 #define SETS_MENU_1 4
-#define SETS_MENU_1_RESET_OUT_2 0
-#define SETS_MENU_1_COMMIT_2 1
-#define SETS_MENU_1_COUNT 2
+#define SETS_MENU_1_HOLD_COOL_2 0
+#define SETS_MENU_1_RESET_OUT_2 1
+#define SETS_MENU_1_COMMIT_2 2
+#define SETS_MENU_1_COUNT 3
 #define MENU_1_COUNT 5
 #define MENU_LEVELS 5
 

@@ -21,6 +21,7 @@
 #define VERSION_NUMBER 4                      /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023                        /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
+#define COOLING_PIN A6                        /* пин включения максимальной скорости */
 
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMPS_COMMAND "show_temps"

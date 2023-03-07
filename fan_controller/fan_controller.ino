@@ -11,7 +11,9 @@
 #define MU_PRINT
 #include <MicroUART.h>
 // ^^^ настройка UART ^^^
+#include <AnalogKey.h>
 #include <EEPROM.h>
+#include <EncButton2.h>
 #include <GyverPWM.h>
 #include <mString.h>
 #include <microDS18B20.h> /*
@@ -41,14 +43,14 @@
 const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {5, 4}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
 const byte SENSORS_PINS[] = {6, 7};                                 // пины датчиков температуры
-
-#define COOLING_PIN A6 /* пин включения максимальной скорости */
 // ^^^ настраиваемые параметры ^^^
 
 // вычисляемые константы
 const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество ШИМ входов
 const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество ШИМ выходов
 const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
+
+AnalogKey<COOLING_PIN, 1> cooling_keys;
 
 // переменные
 
@@ -68,6 +70,8 @@ InputsInfo inputs_info;
 
 // TODO проверить нужен ли кеш или вычислять на ходу
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
+
+EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];  // кнопки включения режима проветривания
 
 MicroUART uart;         // интерфейс работы с серийным портом
 bool cooling_on;        // режим максимальной скорости
@@ -101,7 +105,6 @@ void setup() {
   uart.begin(SERIAL_SPEED);
   uart.println(F("start"));
 
-  pinMode(COOLING_PIN, INPUT_PULLUP);
   for (byte i = 0; i < INPUTS_COUNT; ++i) {
     pinMode(INPUTS_PINS[i], INPUT);
     memset(inputs_info.pulses_info[i].smooths_buffer, 0, BUFFER_SIZE_FOR_SMOOTH);
@@ -110,6 +113,8 @@ void setup() {
     MicroDS18B20<> sensor(SENSORS_PINS[i]);
     sensor.requestTemp();
   }
+  cooling_keys.attach(0, 1023);
+  cooling_keys.setWindow(200);
 
   // обнуляем таймеры
   pwm_tmr = 0;
@@ -144,15 +149,15 @@ void loop() {
   read_and_exec_command(settings, inputs_info, cmd_data, is_debug);
 
   uint32_t time = millis();
-  if (cooling_on) {
-    if (digitalRead(COOLING_PIN) == LOW) {
-      cooling_on = false;
-      uart.println(F("cooling OFF"));
+  if (cooling_buttons[0].tick(cooling_keys.status(0)) == 6 || (cooling_buttons[0].tick(cooling_keys.status(0)) == 7 && cooling_buttons[0].busy())) {
+    if (!cooling_on) {
+      cooling_on = true;
+      apply_pwm_4all(100);
+      uart.println(F("cooling ON"));
     }
-  } else if (digitalRead(COOLING_PIN) == HIGH) {
-    cooling_on = true;
-    apply_pwm_4all(100);
-    uart.println(F("cooling ON"));
+  } else if (cooling_on) {
+    cooling_on = false;
+    uart.println(F("cooling OFF"));
   } else if (check_diff(time, pwm_tmr, PWM_READ_TIMEOUT)) {
     pwm_tmr = time;
     read_pulses(inputs_info, is_debug);

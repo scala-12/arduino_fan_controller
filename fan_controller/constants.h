@@ -23,6 +23,18 @@
 #define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6                        /* пин включения максимальной скорости */
 
+#define MTRX_PIXELS_IN_CHAR_BY_ROW 6
+#define MTRX_PIXELS_IN_SPACE_BY_ROW (MTRX_PIXELS_IN_CHAR_BY_ROW >> 1)
+#define MTRX_PIXELS_IN_COLUMN 8
+#define MTRX_ROWS_COUNT 1
+#define MTRX_INDENT 1
+#define MTRX_REFRESH_MS 64
+#define MTRX_SLIDING_DELAY_TACTS 8
+#define THE_ULTIMATE_QUESTION_OF_LIFE_THE_UNIVERSE_AND_EVERYTHING 42
+#define MTRX_BUFFER THE_ULTIMATE_QUESTION_OF_LIFE_THE_UNIVERSE_AND_EVERYTHING
+#define MTRX_SLIDE_DELAY (MTRX_REFRESH_MS >> 1)
+#define MTRX_SLIDE_DELAY_HORIZONTAL (MTRX_SLIDE_DELAY / MTRX_COLUMS_COUNT)
+
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMPS_COMMAND "show_temps"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"

@@ -14,6 +14,7 @@
 #include <AnalogKey.h>
 #include <EEPROM.h>
 #include <EncButton2.h>
+#include <GyverMAX7219.h>
 #include <GyverPWM.h>
 #include <mString.h>
 #include <microDS18B20.h> /*
@@ -43,6 +44,13 @@
 const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {5, 4}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
 const byte SENSORS_PINS[] = {6, 7};                                 // пины датчиков температуры
+
+#define MTRX_CS_PIN 12    /*CS-пин матрицы*/
+#define MTRX_CLOCK_PIN 13 /*Clk-пин матрицы*/
+#define MTRX_DATA_PIN A0  /*DIn-пин матрицы*/
+
+#define MTRX_COLUMS_COUNT 4 /*количесиво модулей матрицы в ряд*/
+#define MTRX_BRIGHT 0       /*яркость матрицы [0..15]*/
 // ^^^ настраиваемые параметры ^^^
 
 // вычисляемые константы
@@ -89,13 +97,26 @@ struct Settings {
 };
 Settings settings;  // хранимые параметры
 
-void init_output_params(bool is_first, bool init_rpm);
-byte get_max_by_sensors(bool do_cmd_print);
+struct Max7219Matrix {
+  mString<MTRX_BUFFER> data;  // буфер вывода на матрицу
+  bool changed;               // флаг изменения буфера
+  byte cursor;                // позиция курсора
+  byte next_cursor;           // позиция курсора
+  byte border_cursor;
+  byte border_delay_counter;
+  uint32_t time;  // время прошлого обновления отображения
+  MAX7219<MTRX_COLUMS_COUNT, MTRX_ROWS_COUNT, MTRX_CS_PIN, MTRX_DATA_PIN, MTRX_CLOCK_PIN> panel;
+};
+
+void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx);
+byte get_max_by_sensors(bool do_cmd_print, bool do_mtrx_print);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index, byte more_than_rpm = 0);
 void apply_fan_pwm(byte index, byte duty);
 
 #include "extras.h"
+
+Max7219Matrix mtrx;
 
 void MU_serialEvent() {
   // нужна для чтения буфера
@@ -115,6 +136,12 @@ void setup() {
   }
   cooling_keys.attach(0, 1023);
   cooling_keys.setWindow(200);
+
+  mtrx.panel.begin();
+  mtrx.panel.setBright(MTRX_BRIGHT);
+  mtrx.panel.textDisplayMode(GFX_REPLACE);
+  mtrx.time = 0;
+  init_matrix(mtrx);
 
   // обнуляем таймеры
   pwm_tmr = 0;
@@ -138,17 +165,18 @@ void setup() {
     EEPROM.put(0, settings);
     EEPROM.write(INIT_ADDR, VERSION_NUMBER);
 
-    init_output_params(true, false);
+    init_output_params(true, false, mtrx);
   } else {
     EEPROM.get(0, settings);
-    init_output_params(true, false);
+    init_output_params(true, false, mtrx);
   }
 }
 
 void loop() {
-  read_and_exec_command(settings, inputs_info, cmd_data, is_debug);
+  read_and_exec_command(settings, inputs_info, cmd_data, is_debug, mtrx);
 
   uint32_t time = millis();
+  mtrx_refresh(mtrx, time);
   if (cooling_buttons[0].tick(cooling_keys.status(0)) == 6 || (cooling_buttons[0].tick(cooling_keys.status(0)) == 7 && cooling_buttons[0].busy())) {
     if (!cooling_on) {
       cooling_on = true;
@@ -243,7 +271,7 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
   return running_bits;
 }
 
-void init_output_params(bool is_first, bool init_rpm) {
+void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   if (is_first) {
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       pinMode(get_out_pin(i), OUTPUT);
@@ -256,14 +284,20 @@ void init_output_params(bool is_first, bool init_rpm) {
   if (init_rpm) {
     byte start_duties[OUTPUTS_COUNT];
     // не будем искать минимальную скорость, если вентилятор не остановился или игнорируется
+    int cursor = typewriter_slide_set_text(mtrx, "stop", 0, true);
     byte ignored_bits = stop_fans(ignored_bits, false);
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       if (!bitRead(ignored_bits, i)) {
         // если остановился, то пробуем запустить
         apply_fan_pwm(i, MAX_DUTY);
+
+        cursor = typewriter_slide_set_text(mtrx, "-", cursor);
+      } else {
+        cursor = typewriter_slide_set_text(mtrx, "1", cursor);
       }
     }
     fixed_delay(3000);
+    cursor = typewriter_slide_set_text(mtrx, ";run", cursor);
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       if (!bitRead(ignored_bits, i) && !has_rpm(i)) {
         // если не запустился, то игнорируем его детальную настройку из-за отсутствия обратной связи
@@ -272,7 +306,9 @@ void init_output_params(bool is_first, bool init_rpm) {
         uart.print("fan ");
         uart.print(get_out_pin(i));
         uart.println(F(" without RPM"));
+        cursor = typewriter_slide_set_text(mtrx, "-", cursor);
       } else {
+        cursor = typewriter_slide_set_text(mtrx, "1", cursor);
         settings.min_duties[i] = MAX_DUTY;
         start_duties[i] = MIN_DUTY;
       }
@@ -290,6 +326,7 @@ void init_output_params(bool is_first, bool init_rpm) {
           }
         }
         fixed_delay(700);
+        mString<8> str;
         for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
           if (!bitRead(ignored_bits, i)) {
             uart.print("fan ");
@@ -299,6 +336,14 @@ void init_output_params(bool is_first, bool init_rpm) {
             uart.print(", ");
             uart.print(settings.min_duties[i]);
             uart.println("]");
+
+            str.clear();
+            str.add(" ");
+            str.add(i + 1);
+            str.add("_");
+            str.add(middle_duties[i]);
+            cursor = typewriter_slide_set_text(mtrx, str.buf, cursor);
+
             if ((has_rpm(i))) {
               settings.min_duties[i] = middle_duties[i];
             } else {
@@ -310,6 +355,7 @@ void init_output_params(bool is_first, bool init_rpm) {
       stop_fans(ignored_bits, true);
 
       byte ready_bits = ignored_bits;
+      mString<8> str;
       for (byte _i = 0; _i < MAX_DUTY && (ready_bits != complete_bits); ++_i) {
         uart.print(_i);
         uart.print(F(", search step-by-step min duty "));
@@ -320,6 +366,13 @@ void init_output_params(bool is_first, bool init_rpm) {
 
         for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
           if (!bitRead(ready_bits, i)) {
+            str.clear();
+            str.add(" ");
+            str.add(i + 1);
+            str.add("_");
+            str.add(settings.min_duties[i]);
+            cursor = typewriter_slide_set_text(mtrx, str.buf, cursor);
+
             apply_fan_pwm(i, settings.min_duties[i]);
             if (settings.min_duties[i] == MAX_DUTY) {
               bitSet(ready_bits, i);
@@ -346,6 +399,15 @@ void init_output_params(bool is_first, bool init_rpm) {
           for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
             if (bitRead(changed_bits, i) && has_rpm(i, 50)) {
               bitSet(ready_bits, i);
+
+              str.clear();
+              str.add(" ");
+              str.add(i + 1);
+              str.add("_");
+              str.add(settings.min_duties[i]);
+              str.add("!");
+              cursor = typewriter_slide_set_text(mtrx, str.buf, cursor);
+
               uart.print("fan ");
               uart.print(get_out_pin(i));
               uart.print(F(" min duty "));
@@ -360,6 +422,10 @@ void init_output_params(bool is_first, bool init_rpm) {
         }
       }
     }
+    typewriter_slide_set_text(mtrx, "ok      ", cursor);
+    fixed_delay(2048);
+    set_matrix_text(mtrx, "ok");
+    mtrx_slide_down(mtrx, "");
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {

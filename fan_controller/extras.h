@@ -44,6 +44,16 @@ void init_matrix(Max7219Matrix& mtrx);
 #define mtrx_slide_left(mtrx, new_item_chars, transition) mtrx_slide_h(mtrx, new_item_chars, transition, true)
 #define mtrx_slide_right(mtrx, new_item_chars, transition) mtrx_slide_h(mtrx, new_item_chars, transition, false)
 
+// связанное с меню
+
+void close_menu(Max7219Matrix& mtrx, Menu& menu);
+void select_horizontal_menu(Menu& menu, byte index, byte next_item_index = 0);
+void select_vertical_menu(Menu& menu, byte index);
+void open_menu(Menu& menu);
+void back_menu(Menu& menu);
+void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matrix& mtrx);
+void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu);
+
 // реализация
 
 void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = false) {
@@ -584,6 +594,527 @@ byte text_to_pixels_in_row(char* source) {
   }
 
   return MTRX_INDENT;
+}
+
+void close_menu(Max7219Matrix& mtrx, Menu& menu) {
+  menu.level = 0;
+  menu.prev_level = 1;
+  menu.prev_cursor = 0;
+  menu.is_printed = false;
+  menu.everytime_refresh = false;
+  menu.time = 0;
+  memset(menu.cursor, 0, MENU_LEVELS);
+  mtrx_slide_down(mtrx, "");
+  clear_mtrx(mtrx);
+}
+
+void select_horizontal_menu(Menu& menu, byte index, byte next_item_index = 0) {
+  menu.prev_level = menu.level;
+  menu.cursor[menu.level] = index;
+  ++menu.level;
+  menu.cursor[menu.level] = next_item_index;
+  menu.prev_cursor = 0;
+  menu.is_printed = false;
+  menu.everytime_refresh = false;
+}
+
+void select_vertical_menu(Menu& menu, byte index) {
+  menu.prev_level = menu.level;
+  menu.prev_cursor = menu.cursor[menu.level];
+  menu.cursor[menu.level] = index;
+  menu.is_printed = false;
+  menu.everytime_refresh = false;
+}
+
+void open_menu(Menu& menu) {
+  menu.prev_level = 0;
+  menu.prev_cursor = 0;
+  ++menu.level;
+  menu.cursor[menu.level] = 0;
+  menu.is_printed = false;
+  menu.everytime_refresh = false;
+}
+
+void back_menu(Menu& menu) {
+  menu.prev_level = menu.level;
+  menu.cursor[menu.level] = 0;
+  --menu.level;
+  menu.prev_cursor = menu.cursor[menu.level];
+  menu.is_printed = false;
+  menu.everytime_refresh = false;
+}
+
+void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matrix& mtrx) {
+  if (menu.level == 0) {
+    // меню закрыто
+    if (bitRead(buttons_state[2], HELD_1_BIT)) {
+      open_menu(menu);
+    }
+  } else if (bitRead(buttons_state[1], HELD_1_BIT)) {
+    if (menu.level == 1) {
+      close_menu(mtrx, menu);
+    } else {
+      back_menu(menu);
+    }
+  } else if (bitRead(buttons_state[2], HOLD_0_BIT)) {
+    switch (menu.level) {
+      case 2: {
+        if (menu.cursor[1] == SETS_MENU_1) {
+          switch (menu.cursor[menu.level]) {
+            case SETS_MENU_1_RESET_OUT_2: {
+              mString<MTRX_BUFFER> menu_caption = mtrx.data;
+              mtrx_slide_down(mtrx, " ");
+              init_output_params(false, true, mtrx);
+              mtrx_slide_up(mtrx, menu_caption.buf);
+              break;
+            }
+            case SETS_MENU_1_COMMIT_2: {
+              save_settings(settings, mtrx);
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case 3: {
+        bool go_back = false;
+        switch (menu.cursor[1]) {
+          case TEMP_MENU_1: {
+            if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
+              ((menu.cursor[2] == TEMP_MENU_1_MIN_2) ? (settings.min_temp) : settings.max_temp) = mtrx.data.toInt();
+              go_back = true;
+            }
+            break;
+          }
+        }
+        if (go_back) {
+          back_menu(menu);
+        }
+        break;
+      }
+      case 4: {
+        bool go_back = false;
+        switch (menu.cursor[1]) {
+          case PULSES_MENU_1: {
+            if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MIN_2) && (menu.cursor[3] != SHOW_PARAM_VALUE)) {
+              ((menu.cursor[2] == PULSES_MENU_1_MIN_2) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1] = mtrx.data.toInt();
+              go_back = true;
+            }
+            break;
+          }
+          case DUTIES_MENU_1: {
+            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && (menu.cursor[3] != SHOW_PARAM_VALUE)) {
+              settings.min_duties[menu.cursor[3] - 1] = mtrx.data.toInt();
+              init_output_params(false, false, mtrx);
+              go_back = true;
+            }
+            break;
+          }
+        }
+        if (go_back) {
+          back_menu(menu);
+        }
+        break;
+      }
+    }
+  } else if (bitRead(buttons_state[2], CLICK_BIT)) {
+    bool go_next = false;
+    byte next_index = 0;
+    switch (menu.level) {
+      case 1: {
+        go_next = true;
+        break;
+      }
+      case 2: {
+        if ((menu.cursor[1] == PULSES_MENU_1 || menu.cursor[1] == DUTIES_MENU_1) && menu.cursor[menu.level] != SHOW_PARAM_VALUE) {
+          go_next = true;
+        } else {
+          switch (menu.cursor[1]) {
+            case TEMP_MENU_1: {
+              go_next = menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2;
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case 3: {
+        switch (menu.cursor[1]) {
+          case PULSES_MENU_1: {
+            go_next = (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[menu.level] != SHOW_PARAM_VALUE;
+            break;
+          }
+          case DUTIES_MENU_1: {
+            go_next = menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[menu.level] != SHOW_PARAM_VALUE;
+            break;
+          }
+        }
+        break;
+      }
+    }
+    if (go_next) {
+      select_horizontal_menu(menu, menu.cursor[menu.level], next_index);
+    }
+  } else if (bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) {
+    byte direction = 0;  // [0] - вверх, [1] - вниз
+    switch (menu.level) {
+      case 1: {
+        if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          bitSet(direction, 0);
+        } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < MENU_1_COUNT - 1) {
+          bitSet(direction, 1);
+        }
+        break;
+      }
+      case 2: {
+        switch (menu.cursor[1]) {
+          case PULSES_MENU_1: {
+            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              bitSet(direction, 0);
+            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < PULSES_MENU_1_COUNT - 1) {
+              bitSet(direction, 1);
+            }
+            break;
+          }
+          case TEMP_MENU_1: {
+            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              bitSet(direction, 0);
+            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < TEMP_MENU_1_COUNT - 1) {
+              bitSet(direction, 1);
+            }
+            break;
+          }
+          case DUTIES_MENU_1: {
+            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              bitSet(direction, 0);
+            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < DUTIES_MENU_1_COUNT - 1) {
+              bitSet(direction, 1);
+            }
+            break;
+          }
+          case SETS_MENU_1: {
+            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              bitSet(direction, 0);
+            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < SETS_MENU_1_COUNT - 1) {
+              bitSet(direction, 1);
+            }
+            break;
+          }
+        }
+        break;
+      }
+      case 3: {
+        switch (menu.cursor[1]) {
+          case PULSES_MENU_1: {
+            if (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) {
+              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+                bitSet(direction, 0);
+              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < INPUTS_COUNT) {
+                bitSet(direction, 1);
+              }
+            }
+            break;
+          }
+          case TEMP_MENU_1: {
+            if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
+              byte value = mtrx.data.toInt();
+              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == TEMP_MENU_1_MIN_2 && value < settings.max_temp - 1) || (menu.cursor[2] == TEMP_MENU_1_MAX_2 && value < MAX_TEMP_VALUE))) {
+                mtrx.data.clear();
+                mtrx.data.add(value + 1);
+              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == TEMP_MENU_1_MIN_2 && value > MIN_TEMP_VALUE) || (menu.cursor[2] == TEMP_MENU_1_MAX_2 && value > settings.min_temp + 1))) {
+                mtrx.data.clear();
+                mtrx.data.add(value - 1);
+              }
+            }
+            break;
+          }
+          case DUTIES_MENU_1: {
+            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2) {
+              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+                bitSet(direction, 0);
+              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < OUTPUTS_COUNT) {
+                bitSet(direction, 1);
+              }
+            }
+            break;
+          }
+        }
+        break;
+      }
+      case 4: {
+        switch (menu.cursor[1]) {
+          case PULSES_MENU_1: {
+            if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[3] != SHOW_PARAM_VALUE) {
+              byte value = mtrx.data.toInt();
+              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == PULSES_MENU_1_MIN_2 && value < settings.max_pulses[menu.cursor[3] - 1] - 1) || (menu.cursor[2] == PULSES_MENU_1_MAX_2 && value < PULSE_WIDTH))) {
+                mtrx.data.clear();
+                mtrx.data.add(value + 1);
+              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == PULSES_MENU_1_MIN_2 && value > 0) || (menu.cursor[2] == PULSES_MENU_1_MAX_2 && value > settings.min_pulses[menu.cursor[3] - 1] + 1))) {
+                mtrx.data.clear();
+                mtrx.data.add(value - 1);
+              }
+            }
+            break;
+          }
+          case DUTIES_MENU_1: {
+            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[3] != SHOW_PARAM_VALUE) {
+              byte value = mtrx.data.toInt();
+              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && value < MAX_DUTY) {
+                mtrx.data.clear();
+                mtrx.data.add(value + 1);
+              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && value > MIN_DUTY) {
+                mtrx.data.clear();
+                mtrx.data.add(value - 1);
+              }
+            }
+            break;
+          }
+        }
+        break;
+      }
+    }
+    if (direction != 0) {
+      select_vertical_menu(menu, menu.cursor[menu.level] + ((bitRead(direction, 0)) ? -1 : 1));
+    }
+  }
+
+  if (menu.level != 0) {
+    bool has_key_action = false;
+    for (byte i = 0; !has_key_action && i < CTRL_KEYS_COUNT; ++i) {
+      if (buttons_state[i] != 0) {
+        has_key_action = true;
+      }
+    }
+    if (has_key_action) {
+      menu.time = millis();
+    }
+  }
+}
+
+void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu) {
+  if (!menu.is_printed || menu.everytime_refresh) {
+    if (menu.level != 0) {
+      bool is_repeat = menu.everytime_refresh && menu.is_printed;
+      menu.is_printed = true;
+      menu.everytime_refresh = false;
+      uart.print(menu.level);
+      uart.print(": ");
+      for (byte i = 1; i <= menu.level; ++i) {
+        if (i != 1) {
+          uart.print(" ");
+        }
+        uart.print(menu.cursor[i]);
+      }
+      uart.println();
+      mString<MTRX_BUFFER> caption;
+      switch (menu.level) {
+        case 1: {
+          switch (menu.cursor[menu.level]) {
+            case PULSES_MENU_1: {
+              caption = "input";
+              break;
+            }
+            case TEMP_MENU_1: {
+              caption = "temp";
+              break;
+            }
+            case DUTIES_MENU_1: {
+              caption = "outs";
+              break;
+            }
+            case SETS_MENU_1: {
+              caption = "sets";
+              break;
+            }
+          }
+          break;
+        }
+        case 2: {
+          switch (menu.cursor[1]) {
+            case PULSES_MENU_1: {
+              switch (menu.cursor[menu.level]) {
+                case SHOW_PARAM_VALUE: {
+                  for (byte i = 0; i < INPUTS_COUNT; ++i) {
+                    if (i != 0) {
+                      caption.add(" ");
+                    }
+                    caption.add(inputs_info.pulses_info[i].value);
+                  }
+                  uart.println(caption.buf);
+                  menu.everytime_refresh = true;
+                  break;
+                }
+                case PULSES_MENU_1_MIN_2: {
+                  caption = "min";
+                  break;
+                }
+                case PULSES_MENU_1_MAX_2: {
+                  caption = "max";
+                  break;
+                }
+              }
+              break;
+            }
+            case TEMP_MENU_1: {
+              switch (menu.cursor[menu.level]) {
+                case SHOW_PARAM_VALUE: {
+                  caption.add(inputs_info.str_sensors_values.buf);
+                  menu.everytime_refresh = true;
+                  break;
+                }
+                case TEMP_MENU_1_MIN_2: {
+                  caption = "min";
+                  break;
+                }
+                case TEMP_MENU_1_MAX_2: {
+                  caption = "max";
+                  break;
+                }
+              }
+              break;
+            }
+            case DUTIES_MENU_1: {
+              switch (menu.cursor[menu.level]) {
+                case SHOW_PARAM_VALUE: {
+                  if (cooling_on) {
+                    caption = "100%";
+                  } else {
+                    if (inputs_info.pwm_percent_by_pulse < 10) {
+                      caption.add(0);
+                    }
+                    caption.add(inputs_info.pwm_percent_by_pulse);
+                    caption.add("/");
+                    if (inputs_info.pwm_percent_by_sensor < 10) {
+                      caption.add(0);
+                    }
+                    caption.add(inputs_info.pwm_percent_by_sensor);
+                  }
+
+                  menu.everytime_refresh = true;
+                  break;
+                }
+                case DUTIES_MENU_1_MIN_2: {
+                  caption = "min";
+                  break;
+                }
+              }
+              break;
+            }
+            case SETS_MENU_1: {
+              switch (menu.cursor[menu.level]) {
+                case SETS_MENU_1_RESET_OUT_2: {
+                  caption = "reset ctrl";
+                  break;
+                }
+                case SETS_MENU_1_COMMIT_2: {
+                  caption = "commit";
+                  break;
+                }
+              }
+              break;
+            }
+          }
+          break;
+        }
+        case 3: {
+          switch (menu.cursor[1]) {
+            case PULSES_MENU_1: {
+              if (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) {
+                if (menu.cursor[menu.level] == SHOW_PARAM_VALUE) {
+                  caption.add(get_pulses_settings(menu.cursor[2] == 1).buf);
+                } else {
+                  caption = "set ";
+                  caption.add(menu.cursor[menu.level]);
+                }
+              }
+              break;
+            }
+            case TEMP_MENU_1: {
+              if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
+                if (mtrx.data.startsWith("min") || mtrx.data.startsWith("max")) {
+                  mtrx.data.clear();
+                  mtrx.data.add((menu.cursor[2] == TEMP_MENU_1_MIN_2) ? settings.min_temp : settings.max_temp);
+                }
+                byte value = mtrx.data.toInt();
+                if (value < 10) {
+                  caption.add(0);
+                }
+                caption.add(value);
+                menu.everytime_refresh = true;
+              }
+              break;
+            }
+            case DUTIES_MENU_1: {
+              if (menu.cursor[2] == DUTIES_MENU_1_MIN_2) {
+                if (menu.cursor[menu.level] == SHOW_PARAM_VALUE) {
+                  caption.add(get_duties_settings().buf);
+                } else {
+                  caption = "set ";
+                  caption.add(menu.cursor[menu.level]);
+                }
+              }
+              break;
+            }
+          }
+          break;
+        }
+        case 4: {
+          switch (menu.cursor[1]) {
+            case PULSES_MENU_1: {
+              if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[3] != SHOW_PARAM_VALUE) {
+                if (mtrx.data.startsWith("set ")) {
+                  mtrx.data.clear();
+                  mtrx.data.add(((menu.cursor[2] == PULSES_MENU_1_MIN_2) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1]);
+                }
+                byte value = mtrx.data.toInt();
+                if (value < 10) {
+                  caption.add(0);
+                }
+                caption.add(value);
+                menu.everytime_refresh = true;
+              }
+              break;
+            }
+            case DUTIES_MENU_1: {
+              if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[3] != SHOW_PARAM_VALUE) {
+                if (mtrx.data.startsWith("set ")) {
+                  mtrx.data.clear();
+                  mtrx.data.add(settings.min_duties[menu.cursor[3] - 1]);
+                }
+                byte value = mtrx.data.toInt();
+                if (value < 10) {
+                  caption.add(0);
+                }
+                if (value < 100) {
+                  caption.add(0);
+                }
+                caption.add(value);
+                menu.everytime_refresh = true;
+              }
+              break;
+            }
+          }
+          break;
+        }
+      }
+
+      if (is_repeat) {
+        replace_mtrx_text(mtrx, caption.buf);
+      } else if (str_length(caption.buf) > 0) {
+        if (menu.prev_level == 0) {
+          mtrx_slide_up(mtrx, caption.buf);
+        } else if (menu.level == menu.prev_level) {
+          mtrx_slide_v(mtrx, caption.buf, menu.prev_cursor < menu.cursor[menu.level]);
+        } else {
+          mtrx_slide_h(mtrx, caption.buf, '>', menu.level > menu.prev_level);
+        }
+      } else if (menu.level == 0) {
+        mtrx_slide_down(mtrx, "");
+      }
+    }
+  } else if (check_diff(time, menu.time, MENU_TIMEOUT)) {
+    close_menu(mtrx, menu);
+  }
 }
 
 #endif

@@ -45,6 +45,8 @@ const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины 
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {5, 4}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
 const byte SENSORS_PINS[] = {6, 7};                                 // пины датчиков температуры
 
+int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
+
 #define MTRX_CS_PIN 12    /*CS-пин матрицы*/
 #define MTRX_CLOCK_PIN 13 /*Clk-пин матрицы*/
 #define MTRX_DATA_PIN A0  /*DIn-пин матрицы*/
@@ -59,6 +61,7 @@ const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество �
 const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
 
 AnalogKey<COOLING_PIN, 1> cooling_keys;
+AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> ctrl_keys;
 
 // переменные
 
@@ -79,7 +82,11 @@ InputsInfo inputs_info;
 // TODO проверить нужен ли кеш или вычислять на ходу
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
 
-EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];  // кнопки включения режима проветривания
+EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];             // кнопки включения режима проветривания
+EncButton2<VIRT_BTN, EB_TICK> ctrl_buttons[CTRL_KEYS_COUNT];  // кнопки управления, условные плюс-минус
+uint32_t btn_tmr;
+bool ticks_over;
+byte ctrl_buttons_state[CTRL_KEYS_COUNT];  // состояние кнопок
 
 MicroUART uart;         // интерфейс работы с серийным портом
 bool cooling_on;        // режим максимальной скорости
@@ -107,6 +114,18 @@ struct Max7219Matrix {
   uint32_t time;  // время прошлого обновления отображения
   MAX7219<MTRX_COLUMS_COUNT, MTRX_ROWS_COUNT, MTRX_CS_PIN, MTRX_DATA_PIN, MTRX_CLOCK_PIN> panel;
 };
+
+struct Menu {
+  byte level;
+  byte prev_level;
+  byte cursor[MENU_LEVELS];
+  byte prev_cursor;
+  bool is_printed;
+  bool everytime_refresh;
+  uint32_t time;
+};
+
+Menu menu;
 
 void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx);
 byte get_max_by_sensors(bool do_cmd_print, bool do_mtrx_print);
@@ -136,6 +155,10 @@ void setup() {
   }
   cooling_keys.attach(0, 1023);
   cooling_keys.setWindow(200);
+  for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
+    ctrl_buttons_state[i] = 0;
+    ctrl_keys.setWindow(200);
+  }
 
   mtrx.panel.begin();
   mtrx.panel.setBright(MTRX_BRIGHT);
@@ -145,6 +168,7 @@ void setup() {
 
   // обнуляем таймеры
   pwm_tmr = 0;
+  btn_tmr = 0;
 
   inputs_info.smooth_index = 0;  // номер шага в буфере для сглаживания
   cooling_on = false;            // не режим продувки
@@ -170,12 +194,65 @@ void setup() {
     EEPROM.get(0, settings);
     init_output_params(true, false, mtrx);
   }
+  close_menu(mtrx, menu);
 }
 
 void loop() {
   read_and_exec_command(settings, inputs_info, cmd_data, is_debug, mtrx);
 
   uint32_t time = millis();
+
+  ticks_over = true;
+  for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
+    switch (ctrl_buttons[i].tick(ctrl_keys.status(i))) {
+      case 5: {
+        bitSet(ctrl_buttons_state[i], CLICK_BIT);
+        ctrl_buttons[i].resetState();
+        if (is_debug) {
+          uart.print("click ");
+          uart.println(i);
+        }
+        break;
+      }
+      case 6: {
+        if (ctrl_buttons[i].held(1)) {
+          bitSet(ctrl_buttons_state[i], HELD_1_BIT);
+          if (is_debug) {
+            uart.print("held ");
+            uart.println(i);
+          }
+        } else if (ctrl_buttons[i].hold(0)) {
+          bitSet(ctrl_buttons_state[i], HOLD_0_BIT);
+          if (is_debug) {
+            uart.print("hold ");
+            uart.println(i);
+          }
+        }
+        break;
+      }
+    }
+    if (ctrl_buttons[i].busy()) {
+      if (ticks_over && !(bitRead(ctrl_buttons_state[i], HOLD_0_BIT) || bitRead(ctrl_buttons_state[i], HELD_1_BIT))) {
+        ticks_over = false;
+      }
+    }
+  }
+  if (ticks_over && check_diff(time, btn_tmr, MTRX_REFRESH_MS >> 1)) {
+    btn_tmr = time;
+
+    menu_tick(settings, ctrl_buttons_state, menu, mtrx);
+
+    for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
+      if (i != 2 && bitRead(ctrl_buttons_state[i], HOLD_0_BIT) && ctrl_buttons[i].busy()) {
+        ctrl_buttons_state[i] = 0;
+        bitSet(ctrl_buttons_state[i], HOLD_0_BIT);
+      } else {
+        ctrl_buttons_state[i] = 0;
+      }
+    }
+  }
+
+  menu_refresh(settings, inputs_info, time, mtrx, menu);
   mtrx_refresh(mtrx, time);
   if (cooling_buttons[0].tick(cooling_keys.status(0)) == 6 || (cooling_buttons[0].tick(cooling_keys.status(0)) == 7 && cooling_buttons[0].busy())) {
     if (!cooling_on) {
@@ -426,6 +503,7 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
     fixed_delay(2048);
     set_matrix_text(mtrx, "ok");
     mtrx_slide_down(mtrx, "");
+    menu.time = millis();
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {

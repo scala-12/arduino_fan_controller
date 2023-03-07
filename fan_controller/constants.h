@@ -1,6 +1,8 @@
 #ifndef CONSTS_FILE_INCLUDED
 #define CONSTS_FILE_INCLUDED
 
+#include "menu_constants.h"
+
 // системные параметры, лучше менять
 #define MAX_DUTY 254                          /* максимальное значение заполнения */
 #define MIN_DUTY 1                            /* минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения */
@@ -34,6 +36,12 @@
 #define MTRX_BUFFER THE_ULTIMATE_QUESTION_OF_LIFE_THE_UNIVERSE_AND_EVERYTHING
 #define MTRX_SLIDE_DELAY (MTRX_REFRESH_MS >> 1)
 #define MTRX_SLIDE_DELAY_HORIZONTAL (MTRX_SLIDE_DELAY / MTRX_COLUMS_COUNT)
+
+#define ANALOG_KEYS_PIN A7 /* пин подключения клавиш */
+#define CTRL_KEYS_COUNT 3  /* количество клавиш для управления */
+#define CLICK_BIT 0
+#define HOLD_0_BIT 1
+#define HELD_1_BIT 2
 
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMPS_COMMAND "show_temps"

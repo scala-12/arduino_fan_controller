@@ -62,10 +62,15 @@ const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество �
 const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество ШИМ выходов
 const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
 
-AnalogKey<COOLING_PIN, 1> cooling_keys;
-AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> ctrl_keys;
-
 // переменные
+
+AnalogKey<COOLING_PIN, 1> cooling_keys;                              // клавиши включения режима проветривания
+EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];                    // кнопки включения режима проветривания
+AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> ctrl_keys;  // клавиши управления
+EncButton2<VIRT_BTN, EB_TICK> ctrl_buttons[CTRL_KEYS_COUNT];         // кнопки управления
+uint32_t btn_tmr;                                                    // таймаут опроса кнопки
+bool ticks_over;                                                     // конец опроса кнопок
+byte ctrl_buttons_state[CTRL_KEYS_COUNT];                            // состояние кнопок
 
 struct InputsInfo {
   struct {
@@ -76,27 +81,21 @@ struct InputsInfo {
   mString<3 * INPUTS_COUNT> str_pulses_values;    // строка с значениями входящих ШИМ
   mString<3 * SENSORS_COUNT> str_sensors_values;  // строка с значениями датчиков температуры
   byte sensors_values[SENSORS_COUNT];             // значения датчтков температуры
-  byte pwm_percent_by_pulse;
-  byte pwm_percent_by_sensor;
-  byte pwm_percent_by_optic;
+  byte pwm_percent_by_pulse;                      // результат преобразования входящих ШИМ в выходной ШИМ
+  byte pwm_percent_by_temp;                       // результат преобразования температуры в ШИМ
+  byte pwm_percent_by_optic;                      // результат преобразования скорости вращения в ШИМ
   struct {
-    byte pin;
-    bool state;
-    int counter;
-    int rpm;
-    int smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];
+    byte pin;                                    // пин оптического датчика
+    bool state;                                  // встречен разделитель
+    int counter;                                 // количество вращений на текущий момент
+    int rpm;                                     // скорость, преобразованное из количества вращений за отведенное время
+    int smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания сигнала
   } optical;
 };
 InputsInfo inputs_info;
 
 // TODO проверить нужен ли кеш или вычислять на ходу
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
-
-EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];             // кнопки включения режима проветривания
-EncButton2<VIRT_BTN, EB_TICK> ctrl_buttons[CTRL_KEYS_COUNT];  // кнопки управления, условные плюс-минус
-uint32_t btn_tmr;
-bool ticks_over;
-byte ctrl_buttons_state[CTRL_KEYS_COUNT];  // состояние кнопок
 
 MicroUART uart;         // интерфейс работы с серийным портом
 bool cooling_on;        // режим максимальной скорости
@@ -141,7 +140,6 @@ struct Menu {
 Menu menu;
 
 void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx);
-byte get_max_by_sensors(bool do_cmd_print, bool do_mtrx_print);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index, byte more_than_rpm = 0);
 void apply_fan_pwm(byte index, byte duty);
@@ -304,7 +302,7 @@ void loop() {
 
     read_pulses(inputs_info, is_debug);
     read_temps(settings, inputs_info, is_debug);
-    byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_sensor);
+    byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_temp);
     max_percent = max(max_percent, inputs_info.pwm_percent_by_optic);
 
     apply_pwm_4all(max_percent);

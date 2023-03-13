@@ -8,7 +8,7 @@ void print_bits(byte bits, byte size);
 
 void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = false);
 void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false);
-void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
+void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
@@ -57,7 +57,7 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
 // реализация
 
 void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = false) {
-  inputs_info.pwm_percent_by_sensor = settings.min_temp;
+  byte max_temp = settings.min_temp;
   inputs_info.str_sensors_values.clear();
   for (byte i = 0; i < SENSORS_COUNT; ++i) {
     MicroDS18B20<> sensor(SENSORS_PINS[i], false);
@@ -78,7 +78,7 @@ void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = 
         inputs_info.str_sensors_values.add(0);
       }
       inputs_info.str_sensors_values.add(inputs_info.sensors_values[i]);
-      inputs_info.pwm_percent_by_sensor = max(inputs_info.sensors_values[i], inputs_info.pwm_percent_by_sensor);
+      max_temp = max(inputs_info.sensors_values[i], max_temp);
     } else {
       if (do_cmd_print) {
         uart.println("error");
@@ -88,7 +88,7 @@ void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = 
     sensor.requestTemp();
   }
 
-  inputs_info.pwm_percent_by_sensor = convert_by_sqrt(inputs_info.pwm_percent_by_sensor, settings.min_temp, settings.max_temp, 0, 100);
+  inputs_info.pwm_percent_by_temp = convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
 }
 
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool is_min) {
@@ -144,7 +144,7 @@ void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false) {
     uart.println(inputs_info.str_pulses_values.buf);
   }
 
-  inputs_info.pwm_percent_by_sensor = 0;
+  inputs_info.pwm_percent_by_pulse = 0;
   for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
     byte smooth_pulse = find_median<BUFFER_SIZE_FOR_SMOOTH, byte>(inputs_info.pulses_info[input_index].smooths_buffer, true);
     byte pulse = constrain(smooth_pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
@@ -152,7 +152,7 @@ void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false) {
         pulse,
         settings.min_pulses[input_index], settings.max_pulses[input_index],
         0, 100);
-    inputs_info.pwm_percent_by_sensor = max(inputs_info.pwm_percent_by_sensor, pulse_2percent);
+    inputs_info.pwm_percent_by_pulse = max(inputs_info.pwm_percent_by_pulse, pulse_2percent);
 
     if (do_cmd_print) {
       uart.print(F("input "));
@@ -184,7 +184,7 @@ void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false) {
   }
 }
 
-void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
+void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
   while (uart.available() > 0) {
     // чтение команды с серийного порта
     cmd_data.add((char)uart.read());
@@ -192,6 +192,9 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
     fixed_delay(20);
   }
   if (recieved_flag && str_length(cmd_data.buf) > 3) {
+    if (mtrx.data.indexOf("error") == 0) {
+      mtrx_slide_down(mtrx, "");
+    }
     if (cmd_data.startsWith(SHOW_PULSES_COMMAND)) {
       uart.print(SHOW_PULSES_COMMAND);
       uart.print(": ");
@@ -199,7 +202,7 @@ void read_and_exec_command(Settings settings, InputsInfo& inputs_info, mString<6
     } else if (cmd_data.startsWith(SHOW_TEMPS_COMMAND)) {
       uart.print(SHOW_TEMPS_COMMAND);
       uart.print(": ");
-      uart.println(inputs_info.str_pulses_values.buf);
+      uart.println(inputs_info.str_sensors_values.buf);
       set_matrix_text(mtrx, inputs_info.str_sensors_values.buf);
     } else if (cmd_data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
       uart.print(SHOW_OPTICAL_COUNTER_COMMAND);
@@ -1084,10 +1087,10 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                     }
                     caption.add(inputs_info.pwm_percent_by_pulse);
                     caption.add(" ");
-                    if (inputs_info.pwm_percent_by_sensor < 10) {
+                    if (inputs_info.pwm_percent_by_temp < 10) {
                       caption.add(0);
                     }
-                    caption.add(inputs_info.pwm_percent_by_sensor);
+                    caption.add(inputs_info.pwm_percent_by_temp);
                     caption.add(" ");
                     if (inputs_info.pwm_percent_by_optic < 10) {
                       caption.add(0);

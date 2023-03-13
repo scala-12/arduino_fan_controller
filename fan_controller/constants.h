@@ -48,7 +48,7 @@
 #define HELD_1_BIT 2
 
 #define SHOW_PULSES_COMMAND "show_pulses"
-#define SHOW_TEMPS_COMMAND "show_temps"
+#define SHOW_TEMP_COMMAND "show_temp"
 #define SHOW_OPTICAL_COUNTER_COMMAND "show_optic"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"
 #define SET_MAX_TEMP_COMMAND "set_max_temp"

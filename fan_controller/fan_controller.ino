@@ -17,24 +17,7 @@
 #include <GyverMAX7219.h>
 #include <GyverPWM.h>
 #include <mString.h>
-#include <microDS18B20.h> /*
-  использовать форк https://github.com/scala-12/microDS18B20:
-  - из template аргумент DS_PIN перемещен в переменные, изменены конструкторы
-    MicroDS18B20(uint8_t ds_pin, bool with_init) {
-      DS_PIN = ds_pin;
-      if (with_init) {
-        pinMode(DS_PIN, INPUT);
-        digitalWrite(DS_PIN, LOW);
-      }
-    }
-    MicroDS18B20(uint8_t ds_pin) {
-      MicroDS18B20(ds_pin, true);
-    }
-  - добавлен метод:
-    uint8_t get_pin() {
-      return DS_PIN;
-    }
-*/
+#include <microDS18B20.h>
 
 #include "constants.h"
 #include "functions.h"
@@ -43,11 +26,11 @@
 // настраиваемые параметры
 const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
 const byte OUTPUTS_PINS[][2] = {{3, 2}, {5, 4}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
-const byte SENSORS_PINS[] = {6, 7};                                 // пины датчиков температуры
 
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
 
-#define OPTICAL_SENSOR_PIN A5 /* пин оптического энкодера */
+#define TEMP_SENSOR_PIN 6    /* пин датчика температуры */
+#define OPTICAL_SENSOR_PIN 7 /* пин оптического энкодера */
 
 #define MTRX_CS_PIN 12    /*CS-пин матрицы*/
 #define MTRX_CLOCK_PIN 13 /*Clk-пин матрицы*/
@@ -60,7 +43,6 @@ int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни кла
 // вычисляемые константы
 const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество ШИМ входов
 const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество ШИМ выходов
-const byte SENSORS_COUNT = get_arr_len(SENSORS_PINS);  // количество датчиков температуры
 
 // переменные
 
@@ -68,22 +50,25 @@ AnalogKey<COOLING_PIN, 1> cooling_keys;                              // клав
 EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];                    // кнопки включения режима проветривания
 AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> ctrl_keys;  // клавиши управления
 EncButton2<VIRT_BTN, EB_TICK> ctrl_buttons[CTRL_KEYS_COUNT];         // кнопки управления
-uint32_t btn_tmr;                                                    // таймаут опроса кнопки
-bool ticks_over;                                                     // конец опроса кнопок
-byte ctrl_buttons_state[CTRL_KEYS_COUNT];                            // состояние кнопок
+uint32_t btn_tmr;
+bool ticks_over;
+byte ctrl_buttons_state[CTRL_KEYS_COUNT];  // состояние кнопок
 
 struct InputsInfo {
   struct {
     byte smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
     byte value;                                   // последнее значение PWM для отрисовки на матрице
   } pulses_info[INPUTS_COUNT];
-  byte smooth_index;                              // шаг для сглаживания
-  mString<3 * INPUTS_COUNT> str_pulses_values;    // строка с значениями входящих ШИМ
-  mString<3 * SENSORS_COUNT> str_sensors_values;  // строка с значениями датчиков температуры
-  byte sensors_values[SENSORS_COUNT];             // значения датчтков температуры
-  byte pwm_percent_by_pulse;                      // результат преобразования входящих ШИМ в выходной ШИМ
-  byte pwm_percent_by_temp;                       // результат преобразования температуры в ШИМ
-  byte pwm_percent_by_optic;                      // результат преобразования скорости вращения в ШИМ
+  byte smooth_index;                            // шаг для сглаживания
+  mString<3 * INPUTS_COUNT> str_pulses_values;  // строка с значениями входящих ШИМ
+  struct {
+    MicroDS18B20<TEMP_SENSOR_PIN> sensor;  // датчик температуры
+    byte value;                            // значения датчика температуры
+    bool available;                        // датчик температуры активен
+  } temperature;
+  byte pwm_percent_by_pulse;                    // результат преобразования входящих ШИМ в выходной ШИМ
+  byte pwm_percent_by_temp;                     // результат преобразования температуры в ШИМ
+  byte pwm_percent_by_optic;                    // результат преобразования скорости вращения в ШИМ
   struct {
     byte pin;                                    // пин оптического датчика
     bool state;                                  // встречен разделитель
@@ -143,6 +128,7 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx);
 byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index, byte more_than_rpm = 0);
 void apply_fan_pwm(byte index, byte duty);
+void read_temp();
 
 #include "extras.h"
 
@@ -160,10 +146,9 @@ void setup() {
     pinMode(INPUTS_PINS[i], INPUT);
     memset(inputs_info.pulses_info[i].smooths_buffer, 0, BUFFER_SIZE_FOR_SMOOTH);
   }
-  for (byte i = 0; i < SENSORS_COUNT; ++i) {
-    MicroDS18B20<> sensor(SENSORS_PINS[i]);
-    sensor.requestTemp();
-  }
+
+  inputs_info.temperature.sensor.requestTemp();
+
   cooling_keys.attach(0, 1023);
   cooling_keys.setWindow(200);
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
@@ -301,7 +286,7 @@ void loop() {
     inputs_info.pwm_percent_by_optic = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
 
     read_pulses(inputs_info, is_debug);
-    read_temps(settings, inputs_info, is_debug);
+    read_temp();
     byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_temp);
     max_percent = max(max_percent, inputs_info.pwm_percent_by_optic);
 
@@ -574,4 +559,22 @@ void apply_fan_pwm(byte index, byte duty) {
     uart.print(F(", duty "));
     uart.println(duty);
   }
+}
+
+void read_temp() {
+  inputs_info.temperature.available = inputs_info.temperature.sensor.readTemp();
+  if (inputs_info.temperature.available) {
+    inputs_info.temperature.value = inputs_info.temperature.sensor.getTemp();
+    inputs_info.pwm_percent_by_temp = convert_by_sqrt(inputs_info.temperature.value, settings.min_temp, settings.max_temp, 0, 100);
+    if (is_debug) {
+      uart.println(inputs_info.temperature.value);
+    }
+  } else {
+    inputs_info.temperature.value = settings.min_temp;
+    inputs_info.pwm_percent_by_temp = 0;
+    if (is_debug) {
+      uart.println("error");
+    }
+  }
+  inputs_info.temperature.sensor.requestTemp();
 }

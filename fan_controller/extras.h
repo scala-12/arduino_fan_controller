@@ -6,7 +6,6 @@ void print_bits(byte bits, byte size);
 
 // связанное с управлением PWM
 
-void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = false);
 void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false);
 void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
@@ -55,41 +54,6 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
 void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu);
 
 // реализация
-
-void read_temps(Settings settings, InputsInfo& inputs_info, bool do_cmd_print = false) {
-  byte max_temp = settings.min_temp;
-  inputs_info.str_sensors_values.clear();
-  for (byte i = 0; i < SENSORS_COUNT; ++i) {
-    MicroDS18B20<> sensor(SENSORS_PINS[i], false);
-    if (do_cmd_print) {
-      uart.print(F("temp "));
-      uart.print(sensor.get_pin());
-      uart.print(": ");
-    }
-    if (i != 0) {
-      inputs_info.str_sensors_values.add(" ");
-    }
-    if (sensor.readTemp()) {
-      inputs_info.sensors_values[i] = sensor.getTemp();
-      if (do_cmd_print) {
-        uart.println(inputs_info.sensors_values[i]);
-      }
-      if (inputs_info.sensors_values[i] < 10) {
-        inputs_info.str_sensors_values.add(0);
-      }
-      inputs_info.str_sensors_values.add(inputs_info.sensors_values[i]);
-      max_temp = max(inputs_info.sensors_values[i], max_temp);
-    } else {
-      if (do_cmd_print) {
-        uart.println("error");
-      }
-      inputs_info.str_sensors_values.add("--");
-    }
-    sensor.requestTemp();
-  }
-
-  inputs_info.pwm_percent_by_temp = convert_by_sqrt(max_temp, settings.min_temp, settings.max_temp, 0, 100);
-}
 
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool is_min) {
   mString<3 * INPUTS_COUNT> values;
@@ -199,11 +163,17 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
       uart.print(SHOW_PULSES_COMMAND);
       uart.print(": ");
       uart.println(inputs_info.str_pulses_values.buf);
-    } else if (cmd_data.startsWith(SHOW_TEMPS_COMMAND)) {
-      uart.print(SHOW_TEMPS_COMMAND);
+    } else if (cmd_data.startsWith(SHOW_TEMP_COMMAND)) {
+      uart.print(SHOW_TEMP_COMMAND);
       uart.print(": ");
-      uart.println(inputs_info.str_sensors_values.buf);
-      set_matrix_text(mtrx, inputs_info.str_sensors_values.buf);
+      mString<8> temp_value;
+      if (inputs_info.temperature.available) {
+        temp_value.add(inputs_info.temperature.value);
+      } else {
+        temp_value.add("--");
+      }
+      uart.println(temp_value.buf);
+      set_matrix_text(mtrx, temp_value.buf);
     } else if (cmd_data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
       uart.print(SHOW_OPTICAL_COUNTER_COMMAND);
       uart.print(": ");
@@ -1043,7 +1013,11 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
             case TEMP_MENU_1: {
               switch (menu.cursor[menu.level]) {
                 case SHOW_PARAM_VALUE: {
-                  caption.add(inputs_info.str_sensors_values.buf);
+                  if (inputs_info.temperature.available) {
+                    caption.add(inputs_info.temperature.value);
+                  } else {
+                    caption.add("--");
+                  }
                   menu.everytime_refresh = true;
                   break;
                 }

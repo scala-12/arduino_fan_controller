@@ -98,6 +98,7 @@ struct Settings {
   int max_optic_rpm;               // верхняя граница чувсвительности оптического датчика
   int min_optic_rpm;               // нижняя граница чувсвительности оптического датчика
   bool cool_on_hold;               // состояние кнопки для активации режима продувки
+  byte min_duty_percent;           // процент от минимальной скорости вращения. если меньше 100, то вентилятор может и остановиться
 };
 Settings settings;  // хранимые параметры
 
@@ -180,6 +181,7 @@ void setup() {
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
+    settings.min_duty_percent = 100;
     settings.cool_on_hold = true;
     settings.max_optic_rpm = DEFAULT_MAX_OPTIC_RPM;
     settings.min_optic_rpm = DEFAULT_MIN_OPTIC_RPM;
@@ -528,9 +530,11 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-    for (byte p = 0; p <= 100; ++p) {
+    update_cached_duty(i, 0, settings.min_duties[i] * (settings.min_duty_percent / 100));
+    for (byte p = 1; p <= 99; ++p) {
       update_cached_duty(i, p, convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY));
     }
+    update_cached_duty(i, 100, MAX_DUTY);
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {

@@ -24,7 +24,7 @@
 #define SERIAL_SPEED 115200                   /* скорость серийного порта */
 #define PWM_READ_TIMEOUT 2000                 /* таймаут чтения входящего ЩИМ */
 #define PWM_READ_HZ (1000 / PWM_READ_TIMEOUT) /* частота чтения входящего ЩИМ */
-#define VERSION_NUMBER 6                      /* версия структуры данных, хранящихся в памяти */
+#define VERSION_NUMBER 7                      /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023                        /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6                        /* пин включения максимальной скорости */
@@ -50,6 +50,8 @@
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMP_COMMAND "show_temp"
 #define SHOW_OPTICAL_COUNTER_COMMAND "show_optic"
+#define SHOW_MIN_DUTY_PERCENT_COMMAND "show_min_duty_percent"
+#define SET_MIN_DUTY_PERCENT_COMMAND "set_min_duty_percent"
 #define SET_MIN_TEMP_COMMAND "set_min_temp"
 #define SET_MAX_TEMP_COMMAND "set_max_temp"
 #define GET_MIN_TEMP_COMMAND "get_min_temp"

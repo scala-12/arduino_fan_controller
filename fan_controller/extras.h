@@ -174,6 +174,10 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
       }
       uart.println(temp_value.buf);
       set_matrix_text(mtrx, temp_value.buf);
+    } else if (cmd_data.startsWith(SHOW_MIN_DUTY_PERCENT_COMMAND)) {
+      uart.print(SHOW_MIN_DUTY_PERCENT_COMMAND);
+      uart.print(": ");
+      uart.println(settings.min_duty_percent);
     } else if (cmd_data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
       uart.print(SHOW_OPTICAL_COUNTER_COMMAND);
       uart.print(": ");
@@ -295,6 +299,33 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
         uart.println("error");
         set_matrix_text(mtrx, "error");
       }
+    } else if (cmd_data.startsWith(SET_MIN_DUTY_PERCENT_COMMAND)) {
+      uart.print(SET_MIN_DUTY_PERCENT_COMMAND);
+      uart.println(": ");
+      bool complete = false;
+      char* params[2];
+      byte split_count = cmd_data.split(params, ' ');
+      byte percent_value;
+      if (split_count >= 2) {
+        mString<8> param;
+        param.add(params[1]);
+        percent_value = param.toInt();
+        if (0 <= percent_value && percent_value <= 100) {
+          settings.min_duty_percent = percent_value;
+          complete = true;
+          init_output_params(false, false, mtrx);
+
+          uart.print(F("Min duty percent "));
+          uart.println(percent_value);
+
+          set_matrix_text(mtrx, "B");
+          add_matrix_text_n_space_before(mtrx, percent_value, true);
+        }
+      }
+      if (!complete) {
+        uart.println("error");
+        set_matrix_text(mtrx, "error");
+      }
     } else if (cmd_data.startsWith(SET_MAX_PULSE_COMMAND) || (cmd_data.startsWith(SET_MIN_PULSE_COMMAND))) {
       bool is_max_pulse = cmd_data.startsWith(SET_MAX_PULSE_COMMAND);
       uart.print((is_max_pulse) ? SET_MAX_PULSE_COMMAND : SET_MIN_PULSE_COMMAND);
@@ -354,7 +385,7 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
 void save_settings(Settings settings, Max7219Matrix& mtrx) {
   Settings saved_sets;
   EEPROM.get(0, saved_sets);
-  bool changed = saved_sets.max_temp != settings.max_temp || saved_sets.min_temp != settings.min_temp || saved_sets.cool_on_hold != settings.cool_on_hold;
+  bool changed = saved_sets.max_temp != settings.max_temp || saved_sets.min_temp != settings.min_temp || saved_sets.cool_on_hold != settings.cool_on_hold || saved_sets.min_duty_percent != settings.min_duty_percent;
   for (byte i = 0; i < OUTPUTS_COUNT && !changed; ++i) {
     if (saved_sets.min_duties[i] != settings.min_duties[i]) {
       changed = true;
@@ -689,9 +720,17 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             break;
           }
           case SETS_MENU_1: {
-            if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
-              settings.cool_on_hold = menu.cursor[3] == 1;
-              go_back = true;
+            switch (menu.cursor[2]) {
+              case SETS_MENU_1_HOLD_COOL_2: {
+                settings.cool_on_hold = menu.cursor[3] == 1;
+                go_back = true;
+                break;
+              }
+              case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                settings.min_duty_percent = mtrx.data.toInt();
+                go_back = true;
+                break;
+              }
             }
             break;
           }
@@ -748,9 +787,16 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
               break;
             }
             case SETS_MENU_1: {
-              if (menu.cursor[menu.level] == SETS_MENU_1_HOLD_COOL_2) {
-                go_next = true;
-                next_index = (settings.cool_on_hold) ? 1 : 0;
+              switch (menu.cursor[menu.level]) {
+                case SETS_MENU_1_HOLD_COOL_2: {
+                  go_next = true;
+                  next_index = (settings.cool_on_hold) ? 1 : 0;
+                  break;
+                }
+                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                  go_next = true;
+                  break;
+                }
               }
               break;
             }
@@ -880,11 +926,25 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
             break;
           }
           case SETS_MENU_1: {
-            if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
-              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
-                bitSet(direction, 0);
-              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < 1) {
-                bitSet(direction, 1);
+            switch (menu.cursor[2]) {
+              case SETS_MENU_1_HOLD_COOL_2: {
+                if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+                  bitSet(direction, 0);
+                } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < 1) {
+                  bitSet(direction, 1);
+                }
+                break;
+              }
+              case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                int value = mtrx.data.toInt();
+                if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && value < 100) {
+                  mtrx.data.clear();
+                  mtrx.data.add(value + 1);
+                } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && value >= 1) {
+                  mtrx.data.clear();
+                  mtrx.data.add(value - 1);
+                }
+                break;
               }
             }
             break;
@@ -1092,6 +1152,10 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                   caption = "reset ctrl";
                   break;
                 }
+                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                  caption = "min rpm %";
+                  break;
+                }
                 case SETS_MENU_1_COMMIT_2: {
                   caption = "commit";
                   break;
@@ -1163,11 +1227,30 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               break;
             }
             case SETS_MENU_1: {
-              if (menu.cursor[2] == SETS_MENU_1_HOLD_COOL_2) {
-                if (menu.cursor[menu.level] == 0) {
-                  caption.add("false");
-                } else {
-                  caption.add("true");
+              switch (menu.cursor[2]) {
+                case SETS_MENU_1_HOLD_COOL_2: {
+                  if (menu.cursor[menu.level] == 0) {
+                    caption.add("false");
+                  } else {
+                    caption.add("true");
+                  }
+                  break;
+                }
+                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                  int value = mtrx.data.toInt();
+                  if (value == 0 && mtrx.data.indexOf('0') != 0) {
+                    if (settings.min_duty_percent < 10) {
+                      caption.add(0);
+                    }
+                    caption.add(settings.min_duty_percent);
+                  } else {
+                    if (value < 10) {
+                      caption.add(0);
+                    }
+                    caption.add(value);
+                  }
+                  menu.everytime_refresh = true;
+                  break;
                 }
               }
               break;

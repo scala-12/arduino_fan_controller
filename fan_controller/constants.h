@@ -1,6 +1,8 @@
 #ifndef CONSTS_FILE_INCLUDED
 #define CONSTS_FILE_INCLUDED
 
+#include <Arduino.h>
+
 #include "menu_constants.h"
 
 // системные параметры, лучше менять
@@ -22,7 +24,7 @@
 #define MIN_TEMP_VALUE 10          /* минимальное значение для датчика температуры */
 #define SERIAL_SPEED 115200        /* скорость серийного порта */
 #define SENSE_REFRESH_MS 2000      /* таймаут чтения входящих сигналов */
-#define VERSION_NUMBER 7           /* версия структуры данных, хранящихся в памяти */
+#define VERSION_NUMBER 8           /* версия структуры данных, хранящихся в памяти */
 #define INIT_ADDR 1023             /* ячейка памяти с информацией о структуре хранящихся данных */
 #define PULSE_AVG_POWER 1          /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6             /* пин включения максимальной скорости */
@@ -54,9 +56,16 @@ const byte INPUTS_PINS[] = {A1, A2, A3};  // пины входящих PWM
 #define MTRX_SLIDE_DELAY_HORIZONTAL (MTRX_SLIDE_DELAY / MTRX_PANELS_COUNT)
 
 #define CTRL_KEYS_COUNT 3 /* количество клавиш для управления */
-#define CLICK_BIT 0
-#define HOLD_0_BIT 1
-#define HELD_1_BIT 2
+enum ButtonStateBit : byte {
+  CLICK,
+  HOLD_0,
+  HELD_1
+};
+enum ButtonKey : byte {
+  UP,
+  SELECT,
+  DOWN
+};
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
 
 #define SHOW_PULSES_COMMAND "show_pulses"

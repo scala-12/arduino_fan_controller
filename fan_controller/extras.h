@@ -3,12 +3,14 @@
 
 #include <Arduino.h>
 
-void save_settings(Settings settings, Max7219Matrix& mtrx);
-void print_bits(byte bits, byte size);
+#include "constants.h"
+
+void save_settings(Settings& settings, Max7219Matrix& mtrx);
+void print_bits(byte& bits, byte size);
 
 // связанное с управлением PWM
 
-void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
+void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
@@ -16,8 +18,8 @@ mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
 // связанное с LED матрицей
 
-void mtrx_print(Max7219Matrix& mtrx, char* data, int cursor_h = 0, int cursor_v = 0);
-void mtrx_refresh(Max7219Matrix& mtrx, uint32_t time = -1);
+void mtrx_print(Max7219Matrix& mtrx, char* data, int8_t cursor_h = 0, int8_t cursor_v = 0);
+void mtrx_refresh(Max7219Matrix& mtrx, bool do_check_timeout);
 void clear_mtrx(Max7219Matrix& mtrx);
 void add_matrix_text(Max7219Matrix& mtrx, char* chars);
 void add_matrix_text_n_space_before(Max7219Matrix& mtrx, char* chars, bool add_space);
@@ -25,7 +27,7 @@ void set_matrix_text(Max7219Matrix& mtrx, char* chars);
 void mtrx_slide_v(Max7219Matrix& mtrx, char* new_item_chars, bool top_dir);
 void mtrx_slide_h(Max7219Matrix& mtrx, char* new_item_chars, char transition, bool is_letf);
 void replace_mtrx_text(Max7219Matrix& mtrx, char* caption);
-int typewriter_slide_set_text(Max7219Matrix& mtrx, char* text, int cursor = 0, bool is_first = false);
+int8_t typewriter_slide_set_text(Max7219Matrix& mtrx, char* text, int8_t cursor = 0, bool is_first = false);
 byte text_to_pixels_in_row(char* source);
 void init_matrix(Max7219Matrix& mtrx);
 
@@ -37,12 +39,12 @@ void init_matrix(Max7219Matrix& mtrx);
 // связанное с меню
 
 void close_menu(Max7219Matrix& mtrx, Menu& menu);
-void select_horizontal_menu(Menu& menu, byte index, byte next_item_index = 0);
+void select_horizontal_menu(Menu& menu, byte& next_item_index);
 void select_vertical_menu(Menu& menu, byte index);
 void open_menu(Menu& menu);
 void back_menu(Menu& menu);
-void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matrix& mtrx);
-void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu);
+void menu_tick(Settings& settings, byte buttons_state[CTRL_KEYS_COUNT], Menu& menu, Max7219Matrix& mtrx);
+void menu_refresh(Settings& settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu);
 
 // реализация
 
@@ -73,7 +75,7 @@ mString<4 * OUTPUTS_COUNT> get_duties_settings() {
   return values;
 }
 
-void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
+void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
   while (uart.available() > 0) {
     // чтение команды с серийного порта
     cmd_data.add((char)uart.read());
@@ -157,7 +159,7 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
       bool complete = false;
       char* params[2];
       byte split_count = cmd_data.split(params, ' ');
-      int value;
+      uint16_t value;
       if (split_count >= 2) {
         mString<8> param;
         param.add(params[1]);
@@ -307,7 +309,7 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
   }
 }
 
-void save_settings(Settings settings, Max7219Matrix& mtrx) {
+void save_settings(Settings& settings, Max7219Matrix& mtrx) {
   Settings saved_sets;
   EEPROM.get(0, saved_sets);
   bool changed = saved_sets.max_temp != settings.max_temp || saved_sets.min_temp != settings.min_temp || saved_sets.cool_on_hold != settings.cool_on_hold || saved_sets.min_duty_percent != settings.min_duty_percent;
@@ -326,9 +328,8 @@ void save_settings(Settings settings, Max7219Matrix& mtrx) {
   if (changed) {
     mtrx_slide_left(mtrx, "save...", '>');
     for (byte i = 0; i < (2112 / MTRX_REFRESH_MS); ++i) {
-      for (uint32_t tmr_start = millis(), tmr = millis(); !check_diff(tmr, tmr_start, MTRX_REFRESH_MS); tmr = millis()) {
-      }
-      mtrx_refresh(mtrx);
+      fixed_delay(MTRX_REFRESH_MS);
+      mtrx_refresh(mtrx, false);
     }
     uart.print(F("Settings save: "));
     EEPROM.put(0, settings);
@@ -342,13 +343,13 @@ void save_settings(Settings settings, Max7219Matrix& mtrx) {
   }
 }
 
-void print_bits(byte bits, byte size) {
+void print_bits(byte& bits, byte size) {
   for (byte i = 0; i < size; ++i) {
     uart.print((bitRead(i, i)) ? 1 : 0);
   }
 }
 
-void mtrx_print(Max7219Matrix& mtrx, char* data, int cursor_h = 0, int cursor_v = 0) {
+void mtrx_print(Max7219Matrix& mtrx, char* data, int8_t cursor_h = 0, int8_t cursor_v = 0) {
   mString<MTRX_BUFFER> data_4split;
   data_4split.add(data);
   char* chars[MTRX_BUFFER];
@@ -356,7 +357,7 @@ void mtrx_print(Max7219Matrix& mtrx, char* data, int cursor_h = 0, int cursor_v 
 
   mString<MTRX_BUFFER> str;
   byte shift = 0;
-  int position = 0;
+  int8_t position = 0;
   for (byte i = 0; i < space_count; ++i) {
     position = MTRX_INDENT + cursor_h + shift;
     mtrx.panel.setCursor(position, 1 + cursor_v);
@@ -370,11 +371,11 @@ void mtrx_print(Max7219Matrix& mtrx, char* data, int cursor_h = 0, int cursor_v 
   }
 }
 
-void mtrx_refresh(Max7219Matrix& mtrx, uint32_t time = -1) {
+void mtrx_refresh(Max7219Matrix& mtrx, bool do_check_timeout) {
   bool need_refresh = false;
-  if (time != -1) {
-    if (check_diff(time, mtrx.time, MTRX_REFRESH_MS)) {
-      mtrx.time = time;
+  if (do_check_timeout) {
+    if (is_success_delay(mtrx.time, MTRX_REFRESH_MS)) {
+      mtrx.time = millis();
       need_refresh = true;
     }
   } else {
@@ -463,16 +464,16 @@ void mtrx_slide_v(Max7219Matrix& mtrx, char* new_item_chars, bool top_dir) {
   };
   set_matrix_text(mtrx, new_item_chars);
   fixed_delay(MTRX_SLIDE_DELAY);
-  mtrx_refresh(mtrx);
+  mtrx_refresh(mtrx, false);
 }
 
 void mtrx_slide_h(Max7219Matrix& mtrx, char* new_item_chars, char transition, bool is_letf) {
   for (byte i = 1; i < MTRX_PIXELS_IN_ROW + MTRX_PIXELS_IN_CHAR_BY_ROW; ++i) {
     fixed_delay(MTRX_SLIDE_DELAY_HORIZONTAL);
     mtrx.panel.clear();
-    int new_item_cursor = i - MTRX_PIXELS_IN_CHAR_BY_ROW - MTRX_PIXELS_IN_ROW;
-    int old_item_cursor = i;
-    int rect_cursor;
+    int8_t new_item_cursor = i - MTRX_PIXELS_IN_CHAR_BY_ROW - MTRX_PIXELS_IN_ROW;
+    int8_t old_item_cursor = i;
+    int8_t rect_cursor;
     if (is_letf) {
       old_item_cursor *= -1;
       new_item_cursor *= -1;
@@ -497,7 +498,7 @@ void mtrx_slide_h(Max7219Matrix& mtrx, char* new_item_chars, char transition, bo
   };
   set_matrix_text(mtrx, new_item_chars);
   fixed_delay(MTRX_SLIDE_DELAY_HORIZONTAL);
-  mtrx_refresh(mtrx);
+  mtrx_refresh(mtrx, false);
 }
 
 void replace_mtrx_text(Max7219Matrix& mtrx, char* caption) {
@@ -508,7 +509,7 @@ void replace_mtrx_text(Max7219Matrix& mtrx, char* caption) {
   mtrx.data.add(caption);
 }
 
-int typewriter_slide_set_text(Max7219Matrix& mtrx, char* text, int cursor = 0, bool is_first = false) {
+int8_t typewriter_slide_set_text(Max7219Matrix& mtrx, char* text, int8_t cursor = 0, bool is_first = false) {
   if (is_first) {
     cursor = MTRX_PIXELS_IN_ROW - (MTRX_INDENT << 1);
   }
@@ -517,10 +518,9 @@ int typewriter_slide_set_text(Max7219Matrix& mtrx, char* text, int cursor = 0, b
   str.add(text);
   uint32_t tmr_start;
   uint32_t tmr;
-  int cursor_end;
+  int8_t cursor_end;
   for (cursor_end = MTRX_PIXELS_IN_ROW - text_to_pixels_in_row(str.buf); cursor_end <= cursor; --cursor) {
-    for (tmr_start = millis(), tmr = millis(); !check_diff(tmr, tmr_start, MTRX_REFRESH_MS >> 2); tmr = millis()) {
-    }
+    fixed_delay(MTRX_REFRESH_MS >> 2);
     mtrx_print(mtrx, str.buf, cursor);
     mtrx.panel.update();
   }
@@ -559,9 +559,8 @@ void close_menu(Max7219Matrix& mtrx, Menu& menu) {
   clear_mtrx(mtrx);
 }
 
-void select_horizontal_menu(Menu& menu, byte index, byte next_item_index = 0) {
+void select_horizontal_menu(Menu& menu, byte& next_item_index) {
   menu.prev_level = menu.level;
-  menu.cursor[menu.level] = index;
   ++menu.level;
   menu.cursor[menu.level] = next_item_index;
   menu.prev_cursor = 0;
@@ -595,31 +594,34 @@ void back_menu(Menu& menu) {
   menu.everytime_refresh = false;
 }
 
-void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matrix& mtrx) {
+void menu_tick(Settings& settings, byte buttons_state[CTRL_KEYS_COUNT], Menu& menu, Max7219Matrix& mtrx) {
+  const byte UP_STATES = buttons_state[ButtonKey::UP];
+  const byte DOWN_STATES = buttons_state[ButtonKey::SELECT];
+  const byte SELECT_STATES = buttons_state[ButtonKey::DOWN];
   if (menu.level == 0) {
     // меню закрыто
-    if (bitRead(buttons_state[2], HELD_1_BIT)) {
+    if (bitRead(SELECT_STATES, ButtonStateBit::HELD_1)) {
       open_menu(menu);
     }
-  } else if (bitRead(buttons_state[1], HELD_1_BIT)) {
+  } else if (bitRead(DOWN_STATES, ButtonStateBit::HELD_1)) {
     if (menu.level == 1) {
       close_menu(mtrx, menu);
     } else {
       back_menu(menu);
     }
-  } else if (bitRead(buttons_state[2], HOLD_0_BIT)) {
+  } else if (bitRead(SELECT_STATES, ButtonStateBit::HOLD_0)) {
     switch (menu.level) {
       case 2: {
-        if (menu.cursor[1] == SETS_MENU_1) {
+        if (menu.cursor[1] == MainMenu::SETS_MENU) {
           switch (menu.cursor[menu.level]) {
-            case SETS_MENU_1_RESET_OUT_2: {
+            case SetsMenu::RESET_OUT: {
               mString<MTRX_BUFFER> menu_caption = mtrx.data;
               mtrx_slide_down(mtrx, " ");
               init_output_params(false, true, mtrx);
               mtrx_slide_up(mtrx, menu_caption.buf);
               break;
             }
-            case SETS_MENU_1_COMMIT_2: {
+            case SetsMenu::COMMIT: {
               save_settings(settings, mtrx);
               break;
             }
@@ -630,28 +632,28 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
       case 3: {
         bool go_back = false;
         switch (menu.cursor[1]) {
-          case TEMP_MENU_1: {
-            if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
-              ((menu.cursor[2] == TEMP_MENU_1_MIN_2) ? (settings.min_temp) : settings.max_temp) = mtrx.data.toInt();
+          case MainMenu::TEMP_MENU: {
+            if (menu.cursor[2] == TempMenu::MIN_TEMP || menu.cursor[2] == TempMenu::MAX_TEMP) {
+              ((menu.cursor[2] == TempMenu::MIN_TEMP) ? (settings.min_temp) : settings.max_temp) = mtrx.data.toInt();
               go_back = true;
             }
             break;
           }
-          case OPTIC_MENU_1: {
-            if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
-              ((menu.cursor[2] == OPTIC_MENU_1_MIN_2) ? (settings.min_optic_rpm) : settings.max_optic_rpm) = mtrx.data.toInt();
+          case MainMenu::OPTIC_MENU: {
+            if (menu.cursor[2] == OpticMenu::MIN_RPM || menu.cursor[2] == OpticMenu::MAX_RPM) {
+              ((menu.cursor[2] == OpticMenu::MIN_RPM) ? (settings.min_optic_rpm) : settings.max_optic_rpm) = mtrx.data.toInt();
               go_back = true;
             }
             break;
           }
-          case SETS_MENU_1: {
+          case MainMenu::SETS_MENU: {
             switch (menu.cursor[2]) {
-              case SETS_MENU_1_HOLD_COOL_2: {
+              case SetsMenu::HOLD_COOL: {
                 settings.cool_on_hold = menu.cursor[3] == 1;
                 go_back = true;
                 break;
               }
-              case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+              case SetsMenu::MIN_DUTY_PERCENT: {
                 settings.min_duty_percent = mtrx.data.toInt();
                 go_back = true;
                 break;
@@ -668,15 +670,15 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
       case 4: {
         bool go_back = false;
         switch (menu.cursor[1]) {
-          case PULSES_MENU_1: {
-            if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MIN_2) && (menu.cursor[3] != SHOW_PARAM_VALUE)) {
-              ((menu.cursor[2] == PULSES_MENU_1_MIN_2) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1] = mtrx.data.toInt();
+          case MainMenu::PULSES_MENU: {
+            if ((menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MIN_PULSES) && (menu.cursor[3] != PulsesMenu::SHOW_PULSES)) {
+              ((menu.cursor[2] == PulsesMenu::MIN_PULSES) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1] = mtrx.data.toInt();
               go_back = true;
             }
             break;
           }
-          case DUTIES_MENU_1: {
-            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && (menu.cursor[3] != SHOW_PARAM_VALUE)) {
+          case MainMenu::DUTIES_MENU: {
+            if (menu.cursor[2] == DutiesMenu::MIN_DUTIES && (menu.cursor[3] != DutiesMenu::SHOW_DUTIES)) {
               settings.min_duties[menu.cursor[3] - 1] = mtrx.data.toInt();
               init_output_params(false, false, mtrx);
               go_back = true;
@@ -690,7 +692,7 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
         break;
       }
     }
-  } else if (bitRead(buttons_state[2], CLICK_BIT)) {
+  } else if (bitRead(SELECT_STATES, ButtonStateBit::CLICK)) {
     bool go_next = false;
     byte next_index = 0;
     switch (menu.level) {
@@ -699,44 +701,48 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
         break;
       }
       case 2: {
-        if ((menu.cursor[1] == PULSES_MENU_1 || menu.cursor[1] == DUTIES_MENU_1) && menu.cursor[menu.level] != SHOW_PARAM_VALUE) {
-          go_next = true;
-        } else {
-          switch (menu.cursor[1]) {
-            case TEMP_MENU_1: {
-              go_next = menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2;
-              break;
-            }
-            case OPTIC_MENU_1: {
-              go_next = menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2;
-              break;
-            }
-            case SETS_MENU_1: {
-              switch (menu.cursor[menu.level]) {
-                case SETS_MENU_1_HOLD_COOL_2: {
-                  go_next = true;
-                  next_index = (settings.cool_on_hold) ? 1 : 0;
-                  break;
-                }
-                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
-                  go_next = true;
-                  break;
-                }
+        switch (menu.cursor[1]) {
+          case MainMenu::PULSES_MENU: {
+            go_next = menu.cursor[menu.level] != PulsesMenu::SHOW_PULSES;
+            break;
+          }
+          case MainMenu::DUTIES_MENU: {
+            go_next = menu.cursor[menu.level] != DutiesMenu::SHOW_DUTIES;
+            break;
+          }
+          case MainMenu::TEMP_MENU: {
+            go_next = menu.cursor[2] == TempMenu::MIN_TEMP || menu.cursor[2] == TempMenu::MAX_TEMP;
+            break;
+          }
+          case MainMenu::OPTIC_MENU: {
+            go_next = menu.cursor[2] == OpticMenu::MIN_RPM || menu.cursor[2] == OpticMenu::MAX_RPM;
+            break;
+          }
+          case MainMenu::SETS_MENU: {
+            switch (menu.cursor[menu.level]) {
+              case SetsMenu::HOLD_COOL: {
+                go_next = true;
+                next_index = (settings.cool_on_hold) ? 1 : 0;
+                break;
               }
-              break;
+              case SetsMenu::MIN_DUTY_PERCENT: {
+                go_next = true;
+                break;
+              }
             }
+            break;
           }
         }
         break;
       }
       case 3: {
         switch (menu.cursor[1]) {
-          case PULSES_MENU_1: {
-            go_next = (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[menu.level] != SHOW_PARAM_VALUE;
+          case MainMenu::PULSES_MENU: {
+            go_next = (menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MAX_PULSES) && menu.cursor[menu.level] != PulsesMenu::SHOW_PULSES;
             break;
           }
-          case DUTIES_MENU_1: {
-            go_next = menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[menu.level] != SHOW_PARAM_VALUE;
+          case MainMenu::DUTIES_MENU: {
+            go_next = menu.cursor[2] == DutiesMenu::MIN_DUTIES && menu.cursor[menu.level] != DutiesMenu::SHOW_DUTIES;
             break;
           }
         }
@@ -744,57 +750,57 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
       }
     }
     if (go_next) {
-      select_horizontal_menu(menu, menu.cursor[menu.level], next_index);
+      select_horizontal_menu(menu, next_index);
     }
-  } else if (bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) {
+  } else if (bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) {
     byte direction = 0;  // [0] - вверх, [1] - вниз
     switch (menu.level) {
       case 1: {
-        if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+        if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
           bitSet(direction, 0);
-        } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < MENU_1_COUNT - 1) {
+        } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < MAIN_MENU_SIZE - 1) {
           bitSet(direction, 1);
         }
         break;
       }
       case 2: {
         switch (menu.cursor[1]) {
-          case PULSES_MENU_1: {
-            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::PULSES_MENU: {
+            if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
-            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < PULSES_MENU_1_COUNT - 1) {
+            } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < PULSES_MENU_SIZE - 1) {
               bitSet(direction, 1);
             }
             break;
           }
-          case TEMP_MENU_1: {
-            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::TEMP_MENU: {
+            if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
-            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < TEMP_MENU_1_COUNT - 1) {
+            } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < TEMP_MENU_SIZE - 1) {
               bitSet(direction, 1);
             }
             break;
           }
-          case OPTIC_MENU_1: {
-            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::OPTIC_MENU: {
+            if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
-            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < OPTIC_MENU_1_COUNT - 1) {
+            } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < OPTIC_MENU_SIZE - 1) {
               bitSet(direction, 1);
             }
             break;
           }
-          case DUTIES_MENU_1: {
-            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::DUTIES_MENU: {
+            if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
-            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < DUTIES_MENU_1_COUNT - 1) {
+            } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < DUTIES_MENU_SIZE - 1) {
               bitSet(direction, 1);
             }
             break;
           }
-          case SETS_MENU_1: {
-            if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::SETS_MENU: {
+            if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
               bitSet(direction, 0);
-            } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < SETS_MENU_1_COUNT - 1) {
+            } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < SETS_MENU_SIZE - 1) {
               bitSet(direction, 1);
             }
             break;
@@ -804,68 +810,68 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
       }
       case 3: {
         switch (menu.cursor[1]) {
-          case PULSES_MENU_1: {
-            if (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) {
-              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::PULSES_MENU: {
+            if (menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MAX_PULSES) {
+              if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
                 bitSet(direction, 0);
-              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < INPUTS_COUNT) {
+              } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < INPUTS_COUNT) {
                 bitSet(direction, 1);
               }
             }
             break;
           }
-          case TEMP_MENU_1: {
-            if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
+          case MainMenu::TEMP_MENU: {
+            if (menu.cursor[2] == TempMenu::MIN_TEMP || menu.cursor[2] == TempMenu::MAX_TEMP) {
               byte value = mtrx.data.toInt();
-              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == TEMP_MENU_1_MIN_2 && value < settings.max_temp - 1) || (menu.cursor[2] == TEMP_MENU_1_MAX_2 && value < MAX_TEMP_VALUE))) {
+              if ((bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == TempMenu::MIN_TEMP && value < settings.max_temp - 1) || (menu.cursor[2] == TempMenu::MAX_TEMP && value < MAX_TEMP_VALUE))) {
                 mtrx.data.clear();
                 mtrx.data.add(value + 1);
-              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == TEMP_MENU_1_MIN_2 && value > MIN_TEMP_VALUE) || (menu.cursor[2] == TEMP_MENU_1_MAX_2 && value > settings.min_temp + 1))) {
+              } else if ((bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == TempMenu::MIN_TEMP && value > MIN_TEMP_VALUE) || (menu.cursor[2] == TempMenu::MAX_TEMP && value > settings.min_temp + 1))) {
                 mtrx.data.clear();
                 mtrx.data.add(value - 1);
               }
             }
             break;
           }
-          case OPTIC_MENU_1: {
-            if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
+          case MainMenu::OPTIC_MENU: {
+            if (menu.cursor[2] == OpticMenu::MIN_RPM || menu.cursor[2] == OpticMenu::MAX_RPM) {
               int value = mtrx.data.toInt();
-              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == OPTIC_MENU_1_MIN_2 && value < settings.max_optic_rpm - 1) || (menu.cursor[2] == OPTIC_MENU_1_MAX_2 && value < MAX_OPTIC_RPM_VALUE))) {
+              if ((bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == OpticMenu::MIN_RPM && value < settings.max_optic_rpm - 1) || (menu.cursor[2] == OpticMenu::MAX_RPM && value < MAX_OPTIC_RPM_VALUE))) {
                 mtrx.data.clear();
                 mtrx.data.add(value + 1);
-              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == OPTIC_MENU_1_MIN_2 && value > MIN_OPTIC_RPM_VALUE) || (menu.cursor[2] == OPTIC_MENU_1_MAX_2 && value > settings.min_optic_rpm + 1))) {
+              } else if ((bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == OpticMenu::MIN_RPM && value > MIN_OPTIC_RPM_VALUE) || (menu.cursor[2] == OpticMenu::MAX_RPM && value > settings.min_optic_rpm + 1))) {
                 mtrx.data.clear();
                 mtrx.data.add(value - 1);
               }
             }
             break;
           }
-          case DUTIES_MENU_1: {
-            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2) {
-              if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+          case MainMenu::DUTIES_MENU: {
+            if (menu.cursor[2] == DutiesMenu::MIN_DUTIES) {
+              if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] > 0) {
                 bitSet(direction, 0);
-              } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < OUTPUTS_COUNT) {
+              } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] < OUTPUTS_COUNT) {
                 bitSet(direction, 1);
               }
             }
             break;
           }
-          case SETS_MENU_1: {
+          case MainMenu::SETS_MENU: {
             switch (menu.cursor[2]) {
-              case SETS_MENU_1_HOLD_COOL_2: {
-                if (bitRead(buttons_state[0], CLICK_BIT) && menu.cursor[menu.level] > 0) {
+              case SetsMenu::HOLD_COOL: {
+                if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] == 1) {
                   bitSet(direction, 0);
-                } else if (bitRead(buttons_state[1], CLICK_BIT) && menu.cursor[menu.level] < 1) {
+                } else if (bitRead(DOWN_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] == 0) {
                   bitSet(direction, 1);
                 }
                 break;
               }
-              case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+              case SetsMenu::MIN_DUTY_PERCENT: {
                 int value = mtrx.data.toInt();
-                if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && value < 100) {
+                if ((bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0)) && value < 100) {
                   mtrx.data.clear();
                   mtrx.data.add(value + 1);
-                } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && value >= 1) {
+                } else if ((bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) && value >= 1) {
                   mtrx.data.clear();
                   mtrx.data.add(value - 1);
                 }
@@ -879,26 +885,26 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
       }
       case 4: {
         switch (menu.cursor[1]) {
-          case PULSES_MENU_1: {
-            if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[3] != SHOW_PARAM_VALUE) {
+          case MainMenu::PULSES_MENU: {
+            if ((menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MAX_PULSES) && menu.cursor[3] != PulsesMenu::SHOW_PULSES) {
               byte value = mtrx.data.toInt();
-              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && ((menu.cursor[2] == PULSES_MENU_1_MIN_2 && value < settings.max_pulses[menu.cursor[3] - 1] - 1) || (menu.cursor[2] == PULSES_MENU_1_MAX_2 && value < PULSE_WIDTH))) {
+              if ((bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == PulsesMenu::MIN_PULSES && value < settings.max_pulses[menu.cursor[3] - 1] - 1) || (menu.cursor[2] == PulsesMenu::MAX_PULSES && value < PULSE_WIDTH))) {
                 mtrx.data.clear();
                 mtrx.data.add(value + 1);
-              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && ((menu.cursor[2] == PULSES_MENU_1_MIN_2 && value > 0) || (menu.cursor[2] == PULSES_MENU_1_MAX_2 && value > settings.min_pulses[menu.cursor[3] - 1] + 1))) {
+              } else if ((bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) && ((menu.cursor[2] == PulsesMenu::MIN_PULSES && value > 0) || (menu.cursor[2] == PulsesMenu::MAX_PULSES && value > settings.min_pulses[menu.cursor[3] - 1] + 1))) {
                 mtrx.data.clear();
                 mtrx.data.add(value - 1);
               }
             }
             break;
           }
-          case DUTIES_MENU_1: {
-            if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[3] != SHOW_PARAM_VALUE) {
+          case MainMenu::DUTIES_MENU: {
+            if (menu.cursor[2] == DutiesMenu::MIN_DUTIES && menu.cursor[3] != DutiesMenu::SHOW_DUTIES) {
               byte value = mtrx.data.toInt();
-              if ((bitRead(buttons_state[0], CLICK_BIT) || bitRead(buttons_state[0], HOLD_0_BIT)) && value < MAX_DUTY) {
+              if ((bitRead(UP_STATES, ButtonStateBit::CLICK) || bitRead(UP_STATES, ButtonStateBit::HOLD_0)) && value < MAX_DUTY) {
                 mtrx.data.clear();
                 mtrx.data.add(value + 1);
-              } else if ((bitRead(buttons_state[1], CLICK_BIT) || bitRead(buttons_state[1], HOLD_0_BIT)) && value > MIN_DUTY) {
+              } else if ((bitRead(DOWN_STATES, ButtonStateBit::CLICK) || bitRead(DOWN_STATES, ButtonStateBit::HOLD_0)) && value > MIN_DUTY) {
                 mtrx.data.clear();
                 mtrx.data.add(value - 1);
               }
@@ -927,7 +933,7 @@ void menu_tick(Settings& settings, byte* buttons_state, Menu& menu, Max7219Matri
   }
 }
 
-void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu) {
+void menu_refresh(Settings& settings, InputsInfo& inputs_info, uint32_t time, Max7219Matrix& mtrx, Menu& menu) {
   if (!menu.is_printed || menu.everytime_refresh) {
     if (menu.level != 0) {
       bool is_repeat = menu.everytime_refresh && menu.is_printed;
@@ -946,23 +952,23 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
       switch (menu.level) {
         case 1: {
           switch (menu.cursor[menu.level]) {
-            case PULSES_MENU_1: {
+            case MainMenu::PULSES_MENU: {
               caption = "input";
               break;
             }
-            case TEMP_MENU_1: {
+            case MainMenu::TEMP_MENU: {
               caption = "temp";
               break;
             }
-            case OPTIC_MENU_1: {
+            case MainMenu::OPTIC_MENU: {
               caption = "optic";
               break;
             }
-            case DUTIES_MENU_1: {
+            case MainMenu::DUTIES_MENU: {
               caption = "outs";
               break;
             }
-            case SETS_MENU_1: {
+            case MainMenu::SETS_MENU: {
               caption = "sets";
               break;
             }
@@ -971,9 +977,9 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
         }
         case 2: {
           switch (menu.cursor[1]) {
-            case PULSES_MENU_1: {
+            case MainMenu::PULSES_MENU: {
               switch (menu.cursor[menu.level]) {
-                case SHOW_PARAM_VALUE: {
+                case PulsesMenu::SHOW_PULSES: {
                   for (byte i = 0; i < INPUTS_COUNT; ++i) {
                     if (i != 0) {
                       caption.add(" ");
@@ -984,20 +990,20 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                   menu.everytime_refresh = true;
                   break;
                 }
-                case PULSES_MENU_1_MIN_2: {
+                case PulsesMenu::MIN_PULSES: {
                   caption = "min";
                   break;
                 }
-                case PULSES_MENU_1_MAX_2: {
+                case PulsesMenu::MAX_PULSES: {
                   caption = "max";
                   break;
                 }
               }
               break;
             }
-            case TEMP_MENU_1: {
+            case MainMenu::TEMP_MENU: {
               switch (menu.cursor[menu.level]) {
-                case SHOW_PARAM_VALUE: {
+                case TempMenu::SHOW_TEMP: {
                   if (inputs_info.temperature.available) {
                     caption.add(inputs_info.temperature.value);
                   } else {
@@ -1006,38 +1012,38 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                   menu.everytime_refresh = true;
                   break;
                 }
-                case TEMP_MENU_1_MIN_2: {
+                case TempMenu::MIN_TEMP: {
                   caption = "min";
                   break;
                 }
-                case TEMP_MENU_1_MAX_2: {
+                case TempMenu::MAX_TEMP: {
                   caption = "max";
                   break;
                 }
               }
               break;
             }
-            case OPTIC_MENU_1: {
+            case MainMenu::OPTIC_MENU: {
               switch (menu.cursor[menu.level]) {
-                case SHOW_PARAM_VALUE: {
+                case OpticMenu::SHOW_RPM: {
                   caption.add(inputs_info.optical.rpm);
                   menu.everytime_refresh = true;
                   break;
                 }
-                case OPTIC_MENU_1_MIN_2: {
+                case OpticMenu::MIN_RPM: {
                   caption = "min";
                   break;
                 }
-                case OPTIC_MENU_1_MAX_2: {
+                case OpticMenu::MAX_RPM: {
                   caption = "max";
                   break;
                 }
               }
               break;
             }
-            case DUTIES_MENU_1: {
+            case MainMenu::DUTIES_MENU: {
               switch (menu.cursor[menu.level]) {
-                case SHOW_PARAM_VALUE: {
+                case DutiesMenu::SHOW_DUTIES: {
                   if (inputs_info.cooling_on) {
                     caption = "100%";
                   } else {
@@ -1060,28 +1066,28 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                   menu.everytime_refresh = true;
                   break;
                 }
-                case DUTIES_MENU_1_MIN_2: {
+                case DutiesMenu::MIN_DUTIES: {
                   caption = "min";
                   break;
                 }
               }
               break;
             }
-            case SETS_MENU_1: {
+            case MainMenu::SETS_MENU: {
               switch (menu.cursor[menu.level]) {
-                case SETS_MENU_1_HOLD_COOL_2: {
+                case SetsMenu::HOLD_COOL: {
                   caption = "hold cool";
                   break;
                 }
-                case SETS_MENU_1_RESET_OUT_2: {
+                case SetsMenu::RESET_OUT: {
                   caption = "reset ctrl";
                   break;
                 }
-                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
+                case SetsMenu::MIN_DUTY_PERCENT: {
                   caption = "min rpm %";
                   break;
                 }
-                case SETS_MENU_1_COMMIT_2: {
+                case SetsMenu::COMMIT: {
                   caption = "commit";
                   break;
                 }
@@ -1093,9 +1099,9 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
         }
         case 3: {
           switch (menu.cursor[1]) {
-            case PULSES_MENU_1: {
-              if (menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) {
-                if (menu.cursor[menu.level] == SHOW_PARAM_VALUE) {
+            case MainMenu::PULSES_MENU: {
+              if (menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MAX_PULSES) {
+                if (menu.cursor[menu.level] == PulsesMenu::SHOW_PULSES) {
                   caption.add(get_pulses_settings(menu.cursor[2] == 1).buf);
                 } else {
                   caption = "set ";
@@ -1104,11 +1110,11 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
-            case TEMP_MENU_1: {
-              if (menu.cursor[2] == TEMP_MENU_1_MIN_2 || menu.cursor[2] == TEMP_MENU_1_MAX_2) {
+            case MainMenu::TEMP_MENU: {
+              if (menu.cursor[2] == TempMenu::MIN_TEMP || menu.cursor[2] == TempMenu::MAX_TEMP) {
                 if (mtrx.data.startsWith("min") || mtrx.data.startsWith("max")) {
                   mtrx.data.clear();
-                  mtrx.data.add((menu.cursor[2] == TEMP_MENU_1_MIN_2) ? settings.min_temp : settings.max_temp);
+                  mtrx.data.add((menu.cursor[2] == TempMenu::MIN_TEMP) ? settings.min_temp : settings.max_temp);
                 }
                 byte value = mtrx.data.toInt();
                 if (value < 10) {
@@ -1119,11 +1125,11 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
-            case OPTIC_MENU_1: {
-              if (menu.cursor[2] == OPTIC_MENU_1_MIN_2 || menu.cursor[2] == OPTIC_MENU_1_MAX_2) {
+            case MainMenu::OPTIC_MENU: {
+              if (menu.cursor[2] == OpticMenu::MIN_RPM || menu.cursor[2] == OpticMenu::MAX_RPM) {
                 if (mtrx.data.startsWith("min") || mtrx.data.startsWith("max")) {
                   mtrx.data.clear();
-                  mtrx.data.add((menu.cursor[2] == OPTIC_MENU_1_MIN_2) ? settings.min_optic_rpm : settings.max_optic_rpm);
+                  mtrx.data.add((menu.cursor[2] == OpticMenu::MIN_RPM) ? settings.min_optic_rpm : settings.max_optic_rpm);
                 }
                 int value = mtrx.data.toInt();
                 if (value < 10) {
@@ -1140,9 +1146,9 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
-            case DUTIES_MENU_1: {
-              if (menu.cursor[2] == DUTIES_MENU_1_MIN_2) {
-                if (menu.cursor[menu.level] == SHOW_PARAM_VALUE) {
+            case MainMenu::DUTIES_MENU: {
+              if (menu.cursor[2] == DutiesMenu::MIN_DUTIES) {
+                if (menu.cursor[menu.level] == DutiesMenu::SHOW_DUTIES) {
                   caption.add(get_duties_settings().buf);
                 } else {
                   caption = "set ";
@@ -1151,9 +1157,9 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
-            case SETS_MENU_1: {
+            case MainMenu::SETS_MENU: {
               switch (menu.cursor[2]) {
-                case SETS_MENU_1_HOLD_COOL_2: {
+                case SetsMenu::HOLD_COOL: {
                   if (menu.cursor[menu.level] == 0) {
                     caption.add("false");
                   } else {
@@ -1161,8 +1167,8 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
                   }
                   break;
                 }
-                case SETS_MENU_1_MIN_DUTY_PERCENT_2: {
-                  int value = mtrx.data.toInt();
+                case SetsMenu::MIN_DUTY_PERCENT: {
+                  byte value = mtrx.data.toInt();
                   if (value == 0 && mtrx.data.indexOf('0') != 0) {
                     if (settings.min_duty_percent < 10) {
                       caption.add(0);
@@ -1185,11 +1191,11 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
         }
         case 4: {
           switch (menu.cursor[1]) {
-            case PULSES_MENU_1: {
-              if ((menu.cursor[2] == PULSES_MENU_1_MIN_2 || menu.cursor[2] == PULSES_MENU_1_MAX_2) && menu.cursor[3] != SHOW_PARAM_VALUE) {
+            case MainMenu::PULSES_MENU: {
+              if ((menu.cursor[2] == PulsesMenu::MIN_PULSES || menu.cursor[2] == PulsesMenu::MAX_PULSES) && menu.cursor[3] != PulsesMenu::SHOW_PULSES) {
                 if (mtrx.data.startsWith("set ")) {
                   mtrx.data.clear();
-                  mtrx.data.add(((menu.cursor[2] == PULSES_MENU_1_MIN_2) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1]);
+                  mtrx.data.add(((menu.cursor[2] == PulsesMenu::MIN_PULSES) ? settings.min_pulses : settings.max_pulses)[menu.cursor[3] - 1]);
                 }
                 byte value = mtrx.data.toInt();
                 if (value < 10) {
@@ -1200,8 +1206,8 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
               }
               break;
             }
-            case DUTIES_MENU_1: {
-              if (menu.cursor[2] == DUTIES_MENU_1_MIN_2 && menu.cursor[3] != SHOW_PARAM_VALUE) {
+            case MainMenu::DUTIES_MENU: {
+              if (menu.cursor[2] == DutiesMenu::MIN_DUTIES && menu.cursor[3] != DutiesMenu::SHOW_DUTIES) {
                 if (mtrx.data.startsWith("set ")) {
                   mtrx.data.clear();
                   mtrx.data.add(settings.min_duties[menu.cursor[3] - 1]);
@@ -1237,7 +1243,7 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
         mtrx_slide_down(mtrx, "");
       }
     }
-  } else if (check_diff(time, menu.time, MENU_TIMEOUT)) {
+  } else if (is_success_delay(menu.time, MENU_TIMEOUT)) {
     close_menu(mtrx, menu);
   }
 }

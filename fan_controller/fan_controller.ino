@@ -50,27 +50,29 @@ struct {
 } ctrl_keyboard;
 
 struct InputsInfo {
+  uint32_t time;                                // время чтения входящих сигналов
+  bool cooling_on;                              // режим максимальной скорости
+  byte smooth_index;                            // шаг для сглаживания
+  mString<3 * INPUTS_COUNT> str_pulses_values;  // строка с значениями входящих ШИМ
+
   struct {
     byte smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
     byte value;                                   // последнее значение PWM для отрисовки на матрице
   } pulses_info[INPUTS_COUNT];
+
   struct {
     MicroDS18B20<TEMP_SENSOR_PIN> sensor;  // датчик температуры
     byte value;                            // значения датчика температуры
     bool available;                        // датчик температуры активен
   } temperature;
-  struct {
-    byte pin;                                    // пин оптического датчика
-    bool state;                                  // встречен разделитель
-    int counter;                                 // количество вращений на текущий момент
-    int rpm;                                     // скорость, преобразованное из количества вращений за отведенное время
-    int smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания сигнала
-  } optical;
 
-  uint32_t time;                                // время чтения входящих сигналов
-  bool cooling_on;                              // режим максимальной скорости
-  byte smooth_index;                            // шаг для сглаживания
-  mString<3 * INPUTS_COUNT> str_pulses_values;  // строка с значениями входящих ШИМ
+  struct {
+    byte pin;                                         // пин оптического датчика
+    bool state;                                       // встречен разделитель
+    uint16_t counter;                                 // количество вращений на текущий момент
+    uint16_t rpm;                                     // скорость, преобразованное из количества вращений за отведенное время
+    uint16_t smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания сигнала
+  } optical;
 
   struct {
     byte pulse;        // результат преобразования входящих ШИМ в выходной ШИМ
@@ -95,8 +97,8 @@ struct Settings {
   byte max_pulses[INPUTS_COUNT];   // верхняя граница чувствительности к входящему PWM
   byte max_temp;                   // верхняя граница чувсвительности температурного датчика
   byte min_temp;                   // нижняя граница чувсвительности температурного датчика
-  int max_optic_rpm;               // верхняя граница чувсвительности оптического датчика
-  int min_optic_rpm;               // нижняя граница чувсвительности оптического датчика
+  uint16_t max_optic_rpm;          // верхняя граница чувсвительности оптического датчика
+  uint16_t min_optic_rpm;          // нижняя граница чувсвительности оптического датчика
   bool cool_on_hold;               // состояние кнопки для активации режима продувки
   byte min_duty_percent;           // процент от минимальной скорости вращения. если меньше 100, то вентилятор может и остановиться
 };
@@ -105,9 +107,9 @@ Settings settings;  // хранимые параметры
 struct Max7219Matrix {
   mString<MTRX_BUFFER> data;  // буфер вывода на матрицу
   bool changed;               // флаг изменения буфера
-  byte cursor;                // позиция курсора
-  byte next_cursor;           // позиция курсора
-  byte border_cursor;
+  int8_t cursor;              // позиция курсора
+  int8_t next_cursor;         // позиция курсора
+  int8_t border_cursor;
   byte border_delay_counter;
   uint32_t time;  // время прошлого обновления отображения
   MAX7219<MTRX_PANELS_COUNT, MTRX_ROWS_COUNT, MTRX_CS_PIN, MTRX_DATA_PIN, MTRX_CLOCK_PIN> panel;
@@ -210,7 +212,6 @@ void setup() {
 void loop() {
   read_and_exec_command(settings, inputs_info, cmd_data, is_debug, mtrx);
 
-  uint32_t time = millis();
   if (inputs_info.optical.state != digital_read_fast(inputs_info.optical.pin)) {
     inputs_info.optical.state = !inputs_info.optical.state;
     if (inputs_info.optical.state) {
@@ -222,7 +223,7 @@ void loop() {
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
     switch (ctrl_keyboard.buttons[i].tick(ctrl_keyboard.keys.status(i))) {
       case 5: {
-        bitSet(ctrl_keyboard.states[i], CLICK_BIT);
+        bitSet(ctrl_keyboard.states[i], ButtonStateBit::CLICK);
         ctrl_keyboard.buttons[i].resetState();
         if (is_debug) {
           uart.print("click ");
@@ -232,13 +233,13 @@ void loop() {
       }
       case 6: {
         if (ctrl_keyboard.buttons[i].held(1)) {
-          bitSet(ctrl_keyboard.states[i], HELD_1_BIT);
+          bitSet(ctrl_keyboard.states[i], ButtonStateBit::HELD_1);
           if (is_debug) {
             uart.print("held ");
             uart.println(i);
           }
         } else if (ctrl_keyboard.buttons[i].hold(0)) {
-          bitSet(ctrl_keyboard.states[i], HOLD_0_BIT);
+          bitSet(ctrl_keyboard.states[i], ButtonStateBit::HOLD_0);
           if (is_debug) {
             uart.print("hold ");
             uart.println(i);
@@ -248,20 +249,22 @@ void loop() {
       }
     }
     if (ctrl_keyboard.buttons[i].busy()) {
-      if (ctrl_keyboard.ticks_over && !(bitRead(ctrl_keyboard.states[i], HOLD_0_BIT) || bitRead(ctrl_keyboard.states[i], HELD_1_BIT))) {
+      if (ctrl_keyboard.ticks_over && !(bitRead(ctrl_keyboard.states[i], ButtonStateBit::HOLD_0) || bitRead(ctrl_keyboard.states[i], ButtonStateBit::HELD_1))) {
         ctrl_keyboard.ticks_over = false;
       }
     }
   }
-  if (ctrl_keyboard.ticks_over && check_diff(time, ctrl_keyboard.time, MTRX_REFRESH_MS >> 1)) {
+
+  uint32_t time = millis();
+  if (ctrl_keyboard.ticks_over && is_success_delay(ctrl_keyboard.time, MTRX_REFRESH_MS >> 1)) {
     ctrl_keyboard.time = time;
 
     menu_tick(settings, ctrl_keyboard.states, menu, mtrx);
 
     for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
-      if (i != 2 && bitRead(ctrl_keyboard.states[i], HOLD_0_BIT) && ctrl_keyboard.buttons[i].busy()) {
+      if (i != 2 && bitRead(ctrl_keyboard.states[i], ButtonStateBit::HOLD_0) && ctrl_keyboard.buttons[i].busy()) {
         ctrl_keyboard.states[i] = 0;
-        bitSet(ctrl_keyboard.states[i], HOLD_0_BIT);
+        bitSet(ctrl_keyboard.states[i], ButtonStateBit::HOLD_0);
       } else {
         ctrl_keyboard.states[i] = 0;
       }
@@ -269,14 +272,14 @@ void loop() {
   }
 
   menu_refresh(settings, inputs_info, time, mtrx, menu);
-  mtrx_refresh(mtrx, time);
+  mtrx_refresh(mtrx, true);
 
-  bool do_inputs_refresh = check_diff(time, inputs_info.time, SENSE_REFRESH_MS);
+  bool do_inputs_refresh = is_success_delay(inputs_info.time, SENSE_REFRESH_MS);
   if (do_inputs_refresh) {
     inputs_info.time = time;
 
     inputs_info.optical.smooths_buffer[inputs_info.smooth_index] = inputs_info.optical.counter;
-    inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, int>(inputs_info.optical.smooths_buffer, true) * (1000 / SENSE_REFRESH_MS) * 60;
+    inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, uint16_t>(inputs_info.optical.smooths_buffer, true) * (1000 / SENSE_REFRESH_MS) * 60;
     inputs_info.optical.counter = 0;
     inputs_info.pwm_percents.optical = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
 
@@ -388,7 +391,7 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   if (init_rpm) {
     byte start_duties[OUTPUTS_COUNT];
     // не будем искать минимальную скорость, если вентилятор не остановился или игнорируется
-    int cursor = typewriter_slide_set_text(mtrx, "stop", 0, true);
+    int8_t cursor = typewriter_slide_set_text(mtrx, "stop", 0, true);
     byte ignored_bits = stop_fans(ignored_bits, false);
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
       if (!bitRead(ignored_bits, i)) {

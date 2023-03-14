@@ -4,30 +4,28 @@
 #include "menu_constants.h"
 
 // системные параметры, лучше менять
-#define MAX_DUTY 254                          /* максимальное значение заполнения */
-#define MIN_DUTY 1                            /* минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения */
-#define PWM_RES 8                             /* битность PWM */
-#define PULSE_WIDTH 40                        /* период сигнала в микросекундах */
-#define PULSE_FREQ (1000000 / PULSE_WIDTH)    /* частота сигнала */
-#define BUFFER_SIZE_ON_READ 15                /* размер буфера на чтение PWM сигнала */
-#define BUFFER_SIZE_FOR_SMOOTH 5              /* размер буфера для сглаживания входящего сигнала */
-#define DEFAULT_MIN_PERCENT 30                /* нижняя граница чувствительности к входящему PWM */
-#define DEFAULT_MAX_PERCENT 65                /* верхняя граница чувствительности к входящему PWM */
-#define DEFAULT_MIN_TEMP 28                   /* нижняя граница чувсвительности температурного датчика */
-#define DEFAULT_MAX_TEMP 38                   /* верхняя граница чувсвительности температурного датчика */
-#define DEFAULT_MIN_OPTIC_RPM 0               /* нижняя граница чувствительности оптического датчика */
-#define DEFAULT_MAX_OPTIC_RPM 1500            /* верхняя граница чувствительности оптического датчика */
-#define MAX_OPTIC_RPM_VALUE 5000              /* максимальное значение для оптического датчика */
-#define MIN_OPTIC_RPM_VALUE 0                 /* минимальное значение для оптического датчика */
-#define MAX_TEMP_VALUE 50                     /* максимальное значение для датчика температуры */
-#define MIN_TEMP_VALUE 10                     /* минимальное значение для датчика температуры */
-#define SERIAL_SPEED 115200                   /* скорость серийного порта */
-#define PWM_READ_TIMEOUT 2000                 /* таймаут чтения входящего ЩИМ */
-#define PWM_READ_HZ (1000 / PWM_READ_TIMEOUT) /* частота чтения входящего ЩИМ */
-#define VERSION_NUMBER 7                      /* версия структуры данных, хранящихся в памяти */
-#define INIT_ADDR 1023                        /* ячейка памяти с информацией о структуре хранящихся данных */
-#define PULSE_AVG_POWER 1                     /* радиус усреднения медианны для входящего сигнала */
-#define COOLING_PIN A6                        /* пин включения максимальной скорости */
+#define MAX_DUTY 254               /* максимальное значение заполнения */
+#define MIN_DUTY 1                 /* минимальное значение заполнения; если диапазон более 254 значений, то PWM не реагирует на изменения */
+#define PWM_RES 8                  /* битность PWM */
+#define PULSE_WIDTH 40             /* период сигнала в микросекундах */
+#define BUFFER_SIZE_ON_READ 15     /* размер буфера на чтение PWM сигнала */
+#define BUFFER_SIZE_FOR_SMOOTH 5   /* размер буфера для сглаживания входящего сигнала */
+#define DEFAULT_MIN_PERCENT 30     /* нижняя граница чувствительности к входящему PWM */
+#define DEFAULT_MAX_PERCENT 65     /* верхняя граница чувствительности к входящему PWM */
+#define DEFAULT_MIN_TEMP 28        /* нижняя граница чувсвительности температурного датчика */
+#define DEFAULT_MAX_TEMP 38        /* верхняя граница чувсвительности температурного датчика */
+#define DEFAULT_MIN_OPTIC_RPM 0    /* нижняя граница чувствительности оптического датчика */
+#define DEFAULT_MAX_OPTIC_RPM 1500 /* верхняя граница чувствительности оптического датчика */
+#define MAX_OPTIC_RPM_VALUE 5000   /* максимальное значение для оптического датчика */
+#define MIN_OPTIC_RPM_VALUE 0      /* минимальное значение для оптического датчика */
+#define MAX_TEMP_VALUE 50          /* максимальное значение для датчика температуры */
+#define MIN_TEMP_VALUE 10          /* минимальное значение для датчика температуры */
+#define SERIAL_SPEED 115200        /* скорость серийного порта */
+#define SENSE_REFRESH_MS 2000      /* таймаут чтения входящих сигналов */
+#define VERSION_NUMBER 7           /* версия структуры данных, хранящихся в памяти */
+#define INIT_ADDR 1023             /* ячейка памяти с информацией о структуре хранящихся данных */
+#define PULSE_AVG_POWER 1          /* радиус усреднения медианны для входящего сигнала */
+#define COOLING_PIN A6             /* пин включения максимальной скорости */
 
 #define MTRX_PIXELS_IN_CHAR_BY_ROW 6
 #define MTRX_PIXELS_IN_SPACE_BY_ROW (MTRX_PIXELS_IN_CHAR_BY_ROW >> 1)

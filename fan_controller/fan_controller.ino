@@ -279,11 +279,11 @@ void loop() {
   } else if (cooling_on) {
     cooling_on = false;
     uart.println(F("cooling OFF"));
-  } else if (check_diff(time, pwm_tmr, PWM_READ_TIMEOUT)) {
+  } else if (check_diff(time, pwm_tmr, SENSE_REFRESH_MS)) {
     pwm_tmr = time;
 
     inputs_info.optical.smooths_buffer[inputs_info.smooth_index] = inputs_info.optical.counter;
-    inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, int>(inputs_info.optical.smooths_buffer, true) * PWM_READ_HZ * 60;
+    inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, int>(inputs_info.optical.smooths_buffer, true) * (1000 / SENSE_REFRESH_MS) * 60;
     inputs_info.optical.counter = 0;
     inputs_info.pwm_percent_by_optic = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
 
@@ -377,7 +377,7 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
       pinMode(get_out_pin(i), OUTPUT);
       pinMode(get_rpm_pin(i), INPUT_PULLUP);
 
-      PWM_frequency(get_out_pin(i), PULSE_FREQ, FAST_PWM);
+      PWM_frequency(get_out_pin(i), (1000000 / PULSE_WIDTH), FAST_PWM);  // (1s -> mcs) / (период шим)
     }
   }
 

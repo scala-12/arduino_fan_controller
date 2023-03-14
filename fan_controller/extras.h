@@ -10,7 +10,7 @@ void print_bits(byte& bits, byte size);
 
 // связанное с управлением PWM
 
-void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
+void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, Reciever& reciever, bool& is_debug, Max7219Matrix& mtrx);
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
@@ -75,22 +75,22 @@ mString<4 * OUTPUTS_COUNT> get_duties_settings() {
   return values;
 }
 
-void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
+void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, Reciever& reciever, bool& is_debug, Max7219Matrix& mtrx) {
   while (uart.available() > 0) {
     // чтение команды с серийного порта
-    cmd_data.add((char)uart.read());
-    recieved_flag = true;
+    reciever.data.add((char)uart.read());
+    reciever.flag = true;
     fixed_delay(20);
   }
-  if (recieved_flag && str_length(cmd_data.buf) > 3) {
+  if (reciever.flag && str_length(reciever.data.buf) > 3) {
     if (mtrx.data.indexOf("error") == 0) {
       mtrx_slide_down(mtrx, "");
     }
-    if (cmd_data.startsWith(SHOW_PULSES_COMMAND)) {
+    if (reciever.data.startsWith(SHOW_PULSES_COMMAND)) {
       uart.print(SHOW_PULSES_COMMAND);
       uart.print(": ");
       uart.println(inputs_info.str_pulses_values.buf);
-    } else if (cmd_data.startsWith(SHOW_TEMP_COMMAND)) {
+    } else if (reciever.data.startsWith(SHOW_TEMP_COMMAND)) {
       uart.print(SHOW_TEMP_COMMAND);
       uart.print(": ");
       mString<8> temp_value;
@@ -101,64 +101,64 @@ void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<
       }
       uart.println(temp_value.buf);
       set_matrix_text(mtrx, temp_value.buf);
-    } else if (cmd_data.startsWith(SHOW_MIN_DUTY_PERCENT_COMMAND)) {
+    } else if (reciever.data.startsWith(SHOW_MIN_DUTY_PERCENT_COMMAND)) {
       uart.print(SHOW_MIN_DUTY_PERCENT_COMMAND);
       uart.print(": ");
       uart.println(settings.min_duty_percent);
-    } else if (cmd_data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
+    } else if (reciever.data.startsWith(SHOW_OPTICAL_COUNTER_COMMAND)) {
       uart.print(SHOW_OPTICAL_COUNTER_COMMAND);
       uart.print(": ");
       uart.println(inputs_info.optical.rpm);
       set_matrix_text(mtrx, inputs_info.optical.rpm);
-    } else if (cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MAX_TEMP_COMMAND) || cmd_data.startsWith(GET_MIN_OPTICAL_COMMAND) || cmd_data.startsWith(GET_MAX_OPTICAL_COMMAND)) {
-      bool is_min = cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MIN_OPTICAL_COMMAND);
-      bool is_temp = cmd_data.startsWith(GET_MIN_TEMP_COMMAND) || cmd_data.startsWith(GET_MAX_TEMP_COMMAND);
+    } else if (reciever.data.startsWith(GET_MIN_TEMP_COMMAND) || reciever.data.startsWith(GET_MAX_TEMP_COMMAND) || reciever.data.startsWith(GET_MIN_OPTICAL_COMMAND) || reciever.data.startsWith(GET_MAX_OPTICAL_COMMAND)) {
+      bool is_min = reciever.data.startsWith(GET_MIN_TEMP_COMMAND) || reciever.data.startsWith(GET_MIN_OPTICAL_COMMAND);
+      bool is_temp = reciever.data.startsWith(GET_MIN_TEMP_COMMAND) || reciever.data.startsWith(GET_MAX_TEMP_COMMAND);
       uart.print((is_min) ? ((is_temp) ? GET_MIN_TEMP_COMMAND : GET_MIN_OPTICAL_COMMAND) : ((is_temp) ? GET_MAX_TEMP_COMMAND : GET_MAX_OPTICAL_COMMAND));
       uart.print(": ");
       uart.println((is_min) ? settings.min_temp : settings.max_temp);
       set_matrix_text(mtrx, (is_temp) ? "T" : "O");
       add_matrix_text(mtrx, (is_min) ? "v" : "^");
       add_matrix_text_n_space_before(mtrx, (is_min) ? ((is_temp) ? settings.min_temp : settings.min_optic_rpm) : ((is_temp) ? settings.max_temp : settings.max_optic_rpm), true);
-    } else if (cmd_data.startsWith(GET_MIN_DUTIES_COMMAND)) {
+    } else if (reciever.data.startsWith(GET_MIN_DUTIES_COMMAND)) {
       uart.print(GET_MIN_DUTIES_COMMAND);
       uart.print(": ");
       mString<4 * OUTPUTS_COUNT> values = get_duties_settings();
       uart.println(values.buf);
       set_matrix_text(mtrx, values.buf);
-    } else if (cmd_data.startsWith(SAVE_PARAMS_COMMAND)) {
+    } else if (reciever.data.startsWith(SAVE_PARAMS_COMMAND)) {
       uart.println(SAVE_PARAMS_COMMAND);
       save_settings(settings, mtrx);
-    } else if (cmd_data.startsWith(RESET_MIN_DUTIES_COMMAND)) {
+    } else if (reciever.data.startsWith(RESET_MIN_DUTIES_COMMAND)) {
       uart.println(RESET_MIN_DUTIES_COMMAND);
       init_output_params(false, true, mtrx);
-    } else if (cmd_data.startsWith(SWITCH_DEBUG_COMMAND)) {
+    } else if (reciever.data.startsWith(SWITCH_DEBUG_COMMAND)) {
       is_debug = !is_debug;
       mString<16> msg;
       msg.add((is_debug) ? F("Debug mode ON") : F("Debug mode OFF"));
       uart.println(msg.buf);
       set_matrix_text(mtrx, msg.buf);
-    } else if (cmd_data.startsWith(SWITCH_COOLING_HOLD_COMMAND)) {
+    } else if (reciever.data.startsWith(SWITCH_COOLING_HOLD_COMMAND)) {
       settings.cool_on_hold = !settings.cool_on_hold;
       mString<16> msg;
       msg.add((settings.cool_on_hold) ? F("Cooling on HOLD") : F("Ctrl on HOLD"));
       uart.println(msg.buf);
       set_matrix_text(mtrx, msg.buf);
-    } else if (cmd_data.startsWith(GET_MIN_PULSES_COMMAND) || cmd_data.startsWith(GET_MAX_PULSES_COMMAND)) {
-      bool is_min_pulse = cmd_data.startsWith(GET_MIN_PULSES_COMMAND);
+    } else if (reciever.data.startsWith(GET_MIN_PULSES_COMMAND) || reciever.data.startsWith(GET_MAX_PULSES_COMMAND)) {
+      bool is_min_pulse = reciever.data.startsWith(GET_MIN_PULSES_COMMAND);
       mString<3 * INPUTS_COUNT> values = get_pulses_settings(is_min_pulse);
       uart.print((is_min_pulse) ? GET_MIN_PULSES_COMMAND : GET_MAX_PULSES_COMMAND);
       uart.print(": ");
       uart.println(values.buf);
       set_matrix_text(mtrx, values.buf);
-    } else if ((cmd_data.startsWith(SET_MIN_TEMP_COMMAND)) || cmd_data.startsWith(SET_MAX_TEMP_COMMAND) || (cmd_data.startsWith(SET_MIN_OPTICAL_COMMAND)) || cmd_data.startsWith(SET_MAX_OPTICAL_COMMAND)) {
-      bool is_min = cmd_data.startsWith(SET_MIN_TEMP_COMMAND) || cmd_data.startsWith(SET_MIN_OPTICAL_COMMAND);
-      bool is_temp = cmd_data.startsWith(SET_MIN_TEMP_COMMAND) || cmd_data.startsWith(SET_MAX_TEMP_COMMAND);
+    } else if ((reciever.data.startsWith(SET_MIN_TEMP_COMMAND)) || reciever.data.startsWith(SET_MAX_TEMP_COMMAND) || (reciever.data.startsWith(SET_MIN_OPTICAL_COMMAND)) || reciever.data.startsWith(SET_MAX_OPTICAL_COMMAND)) {
+      bool is_min = reciever.data.startsWith(SET_MIN_TEMP_COMMAND) || reciever.data.startsWith(SET_MIN_OPTICAL_COMMAND);
+      bool is_temp = reciever.data.startsWith(SET_MIN_TEMP_COMMAND) || reciever.data.startsWith(SET_MAX_TEMP_COMMAND);
 
       uart.print((is_min) ? ((is_temp) ? SET_MIN_TEMP_COMMAND : SET_MIN_OPTICAL_COMMAND) : ((is_temp) ? SET_MAX_TEMP_COMMAND : SET_MAX_OPTICAL_COMMAND));
       uart.println(": ");
       bool complete = false;
       char* params[2];
-      byte split_count = cmd_data.split(params, ' ');
+      byte split_count = reciever.data.split(params, ' ');
       uint16_t value;
       if (split_count >= 2) {
         mString<8> param;
@@ -192,12 +192,12 @@ void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<
         set_matrix_text(mtrx, "error");
         uart.println("error");
       }
-    } else if (cmd_data.startsWith(SET_MIN_DUTY_COMMAND)) {
+    } else if (reciever.data.startsWith(SET_MIN_DUTY_COMMAND)) {
       uart.print(SET_MIN_DUTY_COMMAND);
       uart.println(": ");
       bool complete = false;
       char* params[3];
-      byte split_count = cmd_data.split(params, ' ');
+      byte split_count = reciever.data.split(params, ' ');
       byte output_index;
       byte duty_value;
       if (split_count >= 3) {
@@ -226,12 +226,12 @@ void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<
         uart.println("error");
         set_matrix_text(mtrx, "error");
       }
-    } else if (cmd_data.startsWith(SET_MIN_DUTY_PERCENT_COMMAND)) {
+    } else if (reciever.data.startsWith(SET_MIN_DUTY_PERCENT_COMMAND)) {
       uart.print(SET_MIN_DUTY_PERCENT_COMMAND);
       uart.println(": ");
       bool complete = false;
       char* params[2];
-      byte split_count = cmd_data.split(params, ' ');
+      byte split_count = reciever.data.split(params, ' ');
       byte percent_value;
       if (split_count >= 2) {
         mString<8> param;
@@ -253,13 +253,13 @@ void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<
         uart.println("error");
         set_matrix_text(mtrx, "error");
       }
-    } else if (cmd_data.startsWith(SET_MAX_PULSE_COMMAND) || (cmd_data.startsWith(SET_MIN_PULSE_COMMAND))) {
-      bool is_max_pulse = cmd_data.startsWith(SET_MAX_PULSE_COMMAND);
+    } else if (reciever.data.startsWith(SET_MAX_PULSE_COMMAND) || (reciever.data.startsWith(SET_MIN_PULSE_COMMAND))) {
+      bool is_max_pulse = reciever.data.startsWith(SET_MAX_PULSE_COMMAND);
       uart.print((is_max_pulse) ? SET_MAX_PULSE_COMMAND : SET_MIN_PULSE_COMMAND);
       uart.println(": ");
       bool complete = false;
       char* params[3];
-      byte split_count = cmd_data.split(params, ' ');
+      byte split_count = reciever.data.split(params, ' ');
       byte input_index;
       byte pulse_value;
       if (split_count >= 3) {
@@ -298,14 +298,14 @@ void read_and_exec_command(Settings& settings, InputsInfo& inputs_info, mString<
       }
     } else {
       uart.print(F("Unexpected command: "));
-      uart.println(cmd_data.buf);
+      uart.println(reciever.data.buf);
       set_matrix_text(mtrx, "Wrong");
       fixed_delay(1500);
       mtrx_slide_down(mtrx, "");
     }
 
-    cmd_data.clear();
-    recieved_flag = false;
+    reciever.data.clear();
+    reciever.flag = false;
   }
 }
 

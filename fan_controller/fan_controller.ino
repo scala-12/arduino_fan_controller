@@ -86,10 +86,13 @@ InputsInfo inputs_info;
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
 #define convert_percent_2duty(index, percent) percent_2duty_cache[index][percent]
 
-MicroUART uart;         // интерфейс работы с серийным портом
-mString<64> cmd_data;   // буфер чтения команды из серийного порта
-boolean recieved_flag;  // флаг на чтение
-boolean is_debug;       // флаг вывода технической информации
+MicroUART uart;    // интерфейс работы с серийным портом
+boolean is_debug;  // флаг вывода технической информации
+struct Reciever {
+  mString<64> data;  // буфер чтения команды из серийного порта
+  boolean flag;      // флаг на чтение
+};
+Reciever reciever;
 
 struct Settings {
   byte min_duties[OUTPUTS_COUNT];  // минимальный PWM для начала вращения
@@ -178,8 +181,9 @@ void setup() {
 
   inputs_info.smooth_index = 0;    // номер шага в буфере для сглаживания
   inputs_info.cooling_on = false;  // не режим продувки
-  cmd_data = "";                   // ощищаем буфер
   is_debug = false;                // не дебаг
+  reciever.data = "";              // ощищаем буфер
+  reciever.flag = false;
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
@@ -210,7 +214,7 @@ void setup() {
 }
 
 void loop() {
-  read_and_exec_command(settings, inputs_info, cmd_data, is_debug, mtrx);
+  read_and_exec_command(settings, inputs_info, reciever, is_debug, mtrx);
 
   if (inputs_info.optical.state != digital_read_fast(inputs_info.optical.pin)) {
     inputs_info.optical.state = !inputs_info.optical.state;

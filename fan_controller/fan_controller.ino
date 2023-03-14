@@ -46,13 +46,18 @@ const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество �
 
 // переменные
 
-AnalogKey<COOLING_PIN, 1> cooling_keys;                              // клавиши включения режима проветривания
-EncButton2<VIRT_BTN, EB_TICK> cooling_buttons[1];                    // кнопки включения режима проветривания
-AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> ctrl_keys;  // клавиши управления
-EncButton2<VIRT_BTN, EB_TICK> ctrl_buttons[CTRL_KEYS_COUNT];         // кнопки управления
-uint32_t btn_tmr;
-bool ticks_over;
-byte ctrl_buttons_state[CTRL_KEYS_COUNT];  // состояние кнопок
+struct {
+  AnalogKey<COOLING_PIN, 1> keys;            // клавиши включения режима проветривания
+  EncButton2<VIRT_BTN, EB_TICK> buttons[1];  // кнопки включения режима проветривания
+} cooling_keyboard;
+
+struct {
+  AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> keys;  // клавиши управления
+  EncButton2<VIRT_BTN, EB_TICK> buttons[CTRL_KEYS_COUNT];         // кнопки управления
+  uint32_t time;                                                  // время окончания чтения
+  bool ticks_over;                                                // ожидание нажатия закончено
+  byte states[CTRL_KEYS_COUNT];                                   // состояние кнопок
+} ctrl_keyboard;
 
 struct InputsInfo {
   struct {
@@ -150,11 +155,11 @@ void setup() {
 
   inputs_info.temperature.sensor.requestTemp();
 
-  cooling_keys.attach(0, 1023);
-  cooling_keys.setWindow(200);
+  cooling_keyboard.keys.attach(0, 1023);
+  cooling_keyboard.keys.setWindow(200);
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
-    ctrl_buttons_state[i] = 0;
-    ctrl_keys.setWindow(200);
+    ctrl_keyboard.states[i] = 0;
+    ctrl_keyboard.keys.setWindow(200);
   }
 
   inputs_info.optical.pin = OPTICAL_SENSOR_PIN;
@@ -172,7 +177,7 @@ void setup() {
 
   // обнуляем таймеры
   pwm_tmr = 0;
-  btn_tmr = 0;
+  ctrl_keyboard.time = 0;
 
   inputs_info.smooth_index = 0;  // номер шага в буфере для сглаживания
   cooling_on = false;            // не режим продувки
@@ -216,12 +221,12 @@ void loop() {
     }
   }
 
-  ticks_over = true;
+  ctrl_keyboard.ticks_over = true;
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
-    switch (ctrl_buttons[i].tick(ctrl_keys.status(i))) {
+    switch (ctrl_keyboard.buttons[i].tick(ctrl_keyboard.keys.status(i))) {
       case 5: {
-        bitSet(ctrl_buttons_state[i], CLICK_BIT);
-        ctrl_buttons[i].resetState();
+        bitSet(ctrl_keyboard.states[i], CLICK_BIT);
+        ctrl_keyboard.buttons[i].resetState();
         if (is_debug) {
           uart.print("click ");
           uart.println(i);
@@ -229,14 +234,14 @@ void loop() {
         break;
       }
       case 6: {
-        if (ctrl_buttons[i].held(1)) {
-          bitSet(ctrl_buttons_state[i], HELD_1_BIT);
+        if (ctrl_keyboard.buttons[i].held(1)) {
+          bitSet(ctrl_keyboard.states[i], HELD_1_BIT);
           if (is_debug) {
             uart.print("held ");
             uart.println(i);
           }
-        } else if (ctrl_buttons[i].hold(0)) {
-          bitSet(ctrl_buttons_state[i], HOLD_0_BIT);
+        } else if (ctrl_keyboard.buttons[i].hold(0)) {
+          bitSet(ctrl_keyboard.states[i], HOLD_0_BIT);
           if (is_debug) {
             uart.print("hold ");
             uart.println(i);
@@ -245,31 +250,31 @@ void loop() {
         break;
       }
     }
-    if (ctrl_buttons[i].busy()) {
-      if (ticks_over && !(bitRead(ctrl_buttons_state[i], HOLD_0_BIT) || bitRead(ctrl_buttons_state[i], HELD_1_BIT))) {
-        ticks_over = false;
+    if (ctrl_keyboard.buttons[i].busy()) {
+      if (ctrl_keyboard.ticks_over && !(bitRead(ctrl_keyboard.states[i], HOLD_0_BIT) || bitRead(ctrl_keyboard.states[i], HELD_1_BIT))) {
+        ctrl_keyboard.ticks_over = false;
       }
     }
   }
-  if (ticks_over && check_diff(time, btn_tmr, MTRX_REFRESH_MS >> 1)) {
-    btn_tmr = time;
+  if (ctrl_keyboard.ticks_over && check_diff(time, ctrl_keyboard.time, MTRX_REFRESH_MS >> 1)) {
+    ctrl_keyboard.time = time;
 
-    menu_tick(settings, ctrl_buttons_state, menu, mtrx);
+    menu_tick(settings, ctrl_keyboard.states, menu, mtrx);
 
     for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
-      if (i != 2 && bitRead(ctrl_buttons_state[i], HOLD_0_BIT) && ctrl_buttons[i].busy()) {
-        ctrl_buttons_state[i] = 0;
-        bitSet(ctrl_buttons_state[i], HOLD_0_BIT);
+      if (i != 2 && bitRead(ctrl_keyboard.states[i], HOLD_0_BIT) && ctrl_keyboard.buttons[i].busy()) {
+        ctrl_keyboard.states[i] = 0;
+        bitSet(ctrl_keyboard.states[i], HOLD_0_BIT);
       } else {
-        ctrl_buttons_state[i] = 0;
+        ctrl_keyboard.states[i] = 0;
       }
     }
   }
 
   menu_refresh(settings, inputs_info, time, mtrx, menu);
   mtrx_refresh(mtrx, time);
-  byte cool_button_state = cooling_buttons[0].tick(cooling_keys.status(0));
-  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_buttons[0].busy());
+  byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
+  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
   if (settings.cool_on_hold == is_hold_button) {
     if (!cooling_on) {
       cooling_on = true;

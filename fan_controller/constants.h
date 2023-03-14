@@ -27,23 +27,37 @@
 #define PULSE_AVG_POWER 1          /* радиус усреднения медианны для входящего сигнала */
 #define COOLING_PIN A6             /* пин включения максимальной скорости */
 
+const byte OUTPUTS_PINS[][2] = {{3, 4}, {5, 6}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
+
+const byte INPUTS_PINS[] = {A1, A2, A3};  // пины входящих PWM
+
+#define TEMP_SENSOR_PIN A4    /* пин датчика температуры */
+#define OPTICAL_SENSOR_PIN A5 /* пин оптического энкодера */
+
+#define COOLING_PIN A6     /* пин включения максимальной скорости */
+#define ANALOG_KEYS_PIN A7 /* пин подключения клавиш */
+
+#define MTRX_CS_PIN 12    /* CS-пин матрицы */
+#define MTRX_CLOCK_PIN 13 /* Clk-пин матрицы */
+#define MTRX_DATA_PIN A0  /* DIn-пин матрицы */
+
 #define MTRX_PIXELS_IN_CHAR_BY_ROW 6
 #define MTRX_PIXELS_IN_SPACE_BY_ROW (MTRX_PIXELS_IN_CHAR_BY_ROW >> 1)
 #define MTRX_PIXELS_IN_COLUMN 8
-#define MTRX_ROWS_COUNT 1
+#define MTRX_PIXELS_IN_ROW (MTRX_PIXELS_IN_COLUMN * MTRX_PANELS_COUNT)  // количество пикселей в ряд
 #define MTRX_INDENT 1
 #define MTRX_REFRESH_MS 64
 #define MTRX_SLIDING_DELAY_TACTS 8
 #define THE_ULTIMATE_QUESTION_OF_LIFE_THE_UNIVERSE_AND_EVERYTHING 42
 #define MTRX_BUFFER THE_ULTIMATE_QUESTION_OF_LIFE_THE_UNIVERSE_AND_EVERYTHING
 #define MTRX_SLIDE_DELAY (MTRX_REFRESH_MS >> 1)
-#define MTRX_SLIDE_DELAY_HORIZONTAL (MTRX_SLIDE_DELAY / MTRX_COLUMS_COUNT)
+#define MTRX_SLIDE_DELAY_HORIZONTAL (MTRX_SLIDE_DELAY / MTRX_PANELS_COUNT)
 
-#define ANALOG_KEYS_PIN A7 /* пин подключения клавиш */
-#define CTRL_KEYS_COUNT 3  /* количество клавиш для управления */
+#define CTRL_KEYS_COUNT 3 /* количество клавиш для управления */
 #define CLICK_BIT 0
 #define HOLD_0_BIT 1
 #define HELD_1_BIT 2
+int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
 
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMP_COMMAND "show_temp"

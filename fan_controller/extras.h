@@ -1,6 +1,8 @@
 #ifndef EXTRAS_FILE_INCLUDED
 #define EXTRAS_FILE_INCLUDED
 
+#include <Arduino.h>
+
 void save_settings(Settings settings, Max7219Matrix& mtrx);
 void print_bits(byte bits, byte size);
 
@@ -10,13 +12,9 @@ void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
-#define get_out_pin(index) OUTPUTS_PINS[index][0]
-#define get_rpm_pin(index) OUTPUTS_PINS[index][1]
 #define convert_percent_2pulse(percent) map(percent, 0, 100, 0, PULSE_WIDTH)
 
 // связанное с LED матрицей
-
-#define MTRX_PIXELS_IN_ROW (MTRX_PIXELS_IN_COLUMN * MTRX_COLUMS_COUNT)  // количество пикселей в ряд
 
 void mtrx_print(Max7219Matrix& mtrx, char* data, int cursor_h = 0, int cursor_v = 0);
 void mtrx_refresh(Max7219Matrix& mtrx, uint32_t time = -1);

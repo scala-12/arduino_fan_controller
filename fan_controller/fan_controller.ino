@@ -2,9 +2,13 @@
 #define TIME_CORRECTOR(func) (((func >> 4) * 10) >> 4) /* коррекция time/25.6 */
 #define micros() TIME_CORRECTOR(micros())              /* коррекция micros */
 #define millis() TIME_CORRECTOR(millis())              /* коррекция millis */
-#define fixed_delay(ms)                                /* иммитация delay(ms) через цикл с корректированными функциями времени */ \
-  for (uint32_t _tmr_start = millis(), _timer = 0; abs(_timer) < ms; _timer = millis() - _tmr_start) {                                                                                \
-  }
+
+// настраиваемые параметры
+
+#define MTRX_PANELS_COUNT 4 /* количество модулей матрицы в ряд */
+#define MTRX_ROWS_COUNT 1   /* количество рядов модулей матрицы */
+#define MTRX_BRIGHT 0       /* яркость матрицы [0..15] */
+// ^^^ настраиваемые параметры ^^^
 
 // настройка UART
 #define MU_RX_BUF 64 /* размер буфера */
@@ -23,22 +27,8 @@
 #include "functions.h"
 #include "macros.h"
 
-// настраиваемые параметры
-const byte INPUTS_PINS[] = {A1, A2, A3};                            // пины входящих PWM
-const byte OUTPUTS_PINS[][2] = {{3, 2}, {5, 4}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
-
-int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
-
-#define TEMP_SENSOR_PIN 6    /* пин датчика температуры */
-#define OPTICAL_SENSOR_PIN 7 /* пин оптического энкодера */
-
-#define MTRX_CS_PIN 12    /*CS-пин матрицы*/
-#define MTRX_CLOCK_PIN 13 /*Clk-пин матрицы*/
-#define MTRX_DATA_PIN A0  /*DIn-пин матрицы*/
-
-#define MTRX_COLUMS_COUNT 4 /*количесиво модулей матрицы в ряд*/
-#define MTRX_BRIGHT 0       /*яркость матрицы [0..15]*/
-// ^^^ настраиваемые параметры ^^^
+#define get_out_pin(index) OUTPUTS_PINS[index][0]
+#define get_rpm_pin(index) OUTPUTS_PINS[index][1]
 
 // вычисляемые константы
 const byte INPUTS_COUNT = get_arr_len(INPUTS_PINS);    // количество ШИМ входов
@@ -120,8 +110,9 @@ struct Max7219Matrix {
   byte border_cursor;
   byte border_delay_counter;
   uint32_t time;  // время прошлого обновления отображения
-  MAX7219<MTRX_COLUMS_COUNT, MTRX_ROWS_COUNT, MTRX_CS_PIN, MTRX_DATA_PIN, MTRX_CLOCK_PIN> panel;
+  MAX7219<MTRX_PANELS_COUNT, MTRX_ROWS_COUNT, MTRX_CS_PIN, MTRX_DATA_PIN, MTRX_CLOCK_PIN> panel;
 };
+Max7219Matrix mtrx;
 
 struct Menu {
   byte level;
@@ -132,7 +123,6 @@ struct Menu {
   bool everytime_refresh;
   uint32_t time;
 };
-
 Menu menu;
 
 void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx);
@@ -144,8 +134,6 @@ void apply_pwm_4all(byte percent);
 void read_pulses();
 
 #include "extras.h"
-
-Max7219Matrix mtrx;
 
 void MU_serialEvent() {
   // нужна для чтения буфера
@@ -164,9 +152,9 @@ void setup() {
 
   cooling_keyboard.keys.attach(0, 1023);
   cooling_keyboard.keys.setWindow(200);
+  ctrl_keyboard.keys.setWindow(1024 / ((CTRL_KEYS_COUNT << 1) - 1));
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
     ctrl_keyboard.states[i] = 0;
-    ctrl_keyboard.keys.setWindow(200);
   }
 
   inputs_info.optical.pin = OPTICAL_SENSOR_PIN;
@@ -193,6 +181,7 @@ void setup() {
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
+    uart.println(F("new data version"));
     settings.min_duty_percent = 100;
     settings.cool_on_hold = true;
     settings.max_optic_rpm = DEFAULT_MAX_OPTIC_RPM;
@@ -211,6 +200,7 @@ void setup() {
 
     init_output_params(true, false, mtrx);
   } else {
+    uart.println(F("load data from EEPROM"));
     EEPROM.get(0, settings);
     init_output_params(true, false, mtrx);
   }
@@ -292,21 +282,21 @@ void loop() {
 
     read_pulses();
     read_temp();
-  }
 
-  byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
-  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
-  if (settings.cool_on_hold == is_hold_button) {
-    if (!inputs_info.cooling_on) {
-      inputs_info.cooling_on = true;
-      apply_pwm_4all(100);
-      uart.println(F("cooling ON"));
+    byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
+    bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
+    if (settings.cool_on_hold == is_hold_button) {
+      if (!inputs_info.cooling_on) {
+        inputs_info.cooling_on = true;
+        apply_pwm_4all(100);
+        uart.println(F("cooling ON"));
+      }
+    } else if (inputs_info.cooling_on) {
+      inputs_info.cooling_on = false;
+      uart.println(F("cooling OFF"));
+    } else {
+      apply_pwm_4all(max(max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.optical));
     }
-  } else if (inputs_info.cooling_on) {
-    inputs_info.cooling_on = false;
-    uart.println(F("cooling OFF"));
-  } else if (do_inputs_refresh) {
-    apply_pwm_4all(max(max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.optical));
   }
 }
 

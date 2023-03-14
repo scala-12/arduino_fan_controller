@@ -1,6 +1,8 @@
 #ifndef FUNCTIONS_FILE_INCLUDED
 #define FUNCTIONS_FILE_INCLUDED
 
+#include <Arduino.h>
+
 // from Alex Gyver site
 bool digital_read_fast(uint8_t pin) {
   if (pin < 8) {

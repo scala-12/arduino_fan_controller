@@ -7,4 +7,8 @@
 
 #define check_diff(int_1, int_2, diff) ((max(int_1, int_2) - min(int_1, int_2)) > diff)
 
+#define fixed_delay(ms) /* иммитация delay(ms) через цикл с корректированными функциями времени */ \
+  for (uint32_t _tmr_start = millis(), _timer = 0; abs(_timer) < ms; _timer = millis() - _tmr_start) {                                                 \
+  }
+
 #endif

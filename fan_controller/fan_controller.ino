@@ -64,16 +64,11 @@ struct InputsInfo {
     byte smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания входящего сигнала
     byte value;                                   // последнее значение PWM для отрисовки на матрице
   } pulses_info[INPUTS_COUNT];
-  byte smooth_index;                            // шаг для сглаживания
-  mString<3 * INPUTS_COUNT> str_pulses_values;  // строка с значениями входящих ШИМ
   struct {
     MicroDS18B20<TEMP_SENSOR_PIN> sensor;  // датчик температуры
     byte value;                            // значения датчика температуры
     bool available;                        // датчик температуры активен
   } temperature;
-  byte pwm_percent_by_pulse;                    // результат преобразования входящих ШИМ в выходной ШИМ
-  byte pwm_percent_by_temp;                     // результат преобразования температуры в ШИМ
-  byte pwm_percent_by_optic;                    // результат преобразования скорости вращения в ШИМ
   struct {
     byte pin;                                    // пин оптического датчика
     bool state;                                  // встречен разделитель
@@ -81,15 +76,25 @@ struct InputsInfo {
     int rpm;                                     // скорость, преобразованное из количества вращений за отведенное время
     int smooths_buffer[BUFFER_SIZE_FOR_SMOOTH];  // буфер для сглаживания сигнала
   } optical;
+
+  uint32_t time;                                // время чтения входящих сигналов
+  bool cooling_on;                              // режим максимальной скорости
+  byte smooth_index;                            // шаг для сглаживания
+  mString<3 * INPUTS_COUNT> str_pulses_values;  // строка с значениями входящих ШИМ
+
+  struct {
+    byte pulse;        // результат преобразования входящих ШИМ в выходной ШИМ
+    byte temperature;  // результат преобразования температуры в ШИМ
+    byte optical;      // результат преобразования скорости вращения в ШИМ
+  } pwm_percents;
 };
 InputsInfo inputs_info;
 
-// TODO проверить нужен ли кеш или вычислять на ходу
+// отказ от кеша экономит 300 байт
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
+#define convert_percent_2duty(index, percent) percent_2duty_cache[index][percent]
 
 MicroUART uart;         // интерфейс работы с серийным портом
-bool cooling_on;        // режим максимальной скорости
-uint32_t pwm_tmr;       // таймер для чтения ШИМ
 mString<64> cmd_data;   // буфер чтения команды из серийного порта
 boolean recieved_flag;  // флаг на чтение
 boolean is_debug;       // флаг вывода технической информации
@@ -135,6 +140,8 @@ byte stop_fans(byte ignored_bits, bool wait_stop);
 boolean has_rpm(byte index, byte more_than_rpm = 0);
 void apply_fan_pwm(byte index, byte duty);
 void read_temp();
+void apply_pwm_4all(byte percent);
+void read_pulses();
 
 #include "extras.h"
 
@@ -176,13 +183,13 @@ void setup() {
   init_matrix(mtrx);
 
   // обнуляем таймеры
-  pwm_tmr = 0;
+  inputs_info.time = 0;
   ctrl_keyboard.time = 0;
 
-  inputs_info.smooth_index = 0;  // номер шага в буфере для сглаживания
-  cooling_on = false;            // не режим продувки
-  cmd_data = "";                 // ощищаем буфер
-  is_debug = false;              // не дебаг
+  inputs_info.smooth_index = 0;    // номер шага в буфере для сглаживания
+  inputs_info.cooling_on = false;  // не режим продувки
+  cmd_data = "";                   // ощищаем буфер
+  is_debug = false;                // не дебаг
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
@@ -273,31 +280,33 @@ void loop() {
 
   menu_refresh(settings, inputs_info, time, mtrx, menu);
   mtrx_refresh(mtrx, time);
-  byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
-  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
-  if (settings.cool_on_hold == is_hold_button) {
-    if (!cooling_on) {
-      cooling_on = true;
-      apply_pwm_4all(100);
-      uart.println(F("cooling ON"));
-    }
-  } else if (cooling_on) {
-    cooling_on = false;
-    uart.println(F("cooling OFF"));
-  } else if (check_diff(time, pwm_tmr, SENSE_REFRESH_MS)) {
-    pwm_tmr = time;
+
+  bool do_inputs_refresh = check_diff(time, inputs_info.time, SENSE_REFRESH_MS);
+  if (do_inputs_refresh) {
+    inputs_info.time = time;
 
     inputs_info.optical.smooths_buffer[inputs_info.smooth_index] = inputs_info.optical.counter;
     inputs_info.optical.rpm = find_median<BUFFER_SIZE_FOR_SMOOTH, int>(inputs_info.optical.smooths_buffer, true) * (1000 / SENSE_REFRESH_MS) * 60;
     inputs_info.optical.counter = 0;
-    inputs_info.pwm_percent_by_optic = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
+    inputs_info.pwm_percents.optical = convert_by_sqrt(inputs_info.optical.rpm, settings.min_optic_rpm, settings.max_optic_rpm, 0, 100);
 
-    read_pulses(inputs_info, is_debug);
+    read_pulses();
     read_temp();
-    byte max_percent = max(inputs_info.pwm_percent_by_pulse, inputs_info.pwm_percent_by_temp);
-    max_percent = max(max_percent, inputs_info.pwm_percent_by_optic);
+  }
 
-    apply_pwm_4all(max_percent);
+  byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
+  bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
+  if (settings.cool_on_hold == is_hold_button) {
+    if (!inputs_info.cooling_on) {
+      inputs_info.cooling_on = true;
+      apply_pwm_4all(100);
+      uart.println(F("cooling ON"));
+    }
+  } else if (inputs_info.cooling_on) {
+    inputs_info.cooling_on = false;
+    uart.println(F("cooling OFF"));
+  } else if (do_inputs_refresh) {
+    apply_pwm_4all(max(max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.optical));
   }
 }
 
@@ -535,11 +544,11 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-    update_cached_duty(i, 0, settings.min_duties[i] * (settings.min_duty_percent / 100));
+    percent_2duty_cache[i][0] = settings.min_duties[i] * (settings.min_duty_percent / 100);
     for (byte p = 1; p <= 99; ++p) {
-      update_cached_duty(i, p, convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY));
+      percent_2duty_cache[i][p] = convert_by_sqrt(p, 0, 100, settings.min_duties[i], MAX_DUTY);
     }
-    update_cached_duty(i, 100, MAX_DUTY);
+    percent_2duty_cache[i][100] = MAX_DUTY;
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
@@ -553,7 +562,7 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
       }
       uart.print(p);
       uart.print("% ");
-      uart.print(get_cached_duty(i, p));
+      uart.print(convert_percent_2duty(i, p));
       uart.print("\t");
     }
     uart.println();
@@ -574,16 +583,88 @@ void read_temp() {
   inputs_info.temperature.available = inputs_info.temperature.sensor.readTemp();
   if (inputs_info.temperature.available) {
     inputs_info.temperature.value = inputs_info.temperature.sensor.getTemp();
-    inputs_info.pwm_percent_by_temp = convert_by_sqrt(inputs_info.temperature.value, settings.min_temp, settings.max_temp, 0, 100);
+    inputs_info.pwm_percents.temperature = convert_by_sqrt(inputs_info.temperature.value, settings.min_temp, settings.max_temp, 0, 100);
     if (is_debug) {
       uart.println(inputs_info.temperature.value);
     }
   } else {
     inputs_info.temperature.value = settings.min_temp;
-    inputs_info.pwm_percent_by_temp = 0;
+    inputs_info.pwm_percents.temperature = 0;
     if (is_debug) {
       uart.println("error");
     }
   }
   inputs_info.temperature.sensor.requestTemp();
+}
+
+void apply_pwm_4all(byte percent) {
+  for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+    apply_fan_pwm(i, convert_percent_2duty(i, percent));
+  }
+}
+
+void read_pulses() {
+  inputs_info.str_pulses_values.clear();
+  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
+    byte buffer_on_read[BUFFER_SIZE_ON_READ];
+    for (byte i = 0; i < BUFFER_SIZE_ON_READ; ++i) {
+      buffer_on_read[i] = pulseIn(INPUTS_PINS[input_index], HIGH, (PULSE_WIDTH << 1));
+      if ((buffer_on_read[i] == 0) && (digital_read_fast(INPUTS_PINS[input_index]) == HIGH)) {
+        buffer_on_read[i] = PULSE_WIDTH;
+      } else {
+        buffer_on_read[i] = constrain(buffer_on_read[i], 0, PULSE_WIDTH);
+      }
+    }
+    inputs_info.pulses_info[input_index].value = find_median<BUFFER_SIZE_ON_READ, byte>(buffer_on_read, PULSE_AVG_POWER, true);
+
+    if (input_index != 0) {
+      inputs_info.str_pulses_values.add(" ");
+    }
+    if (inputs_info.pulses_info[input_index].value < 10) {
+      inputs_info.str_pulses_values.add(0);
+    }
+    inputs_info.str_pulses_values.add(inputs_info.pulses_info[input_index].value);
+  }
+  if (is_debug) {
+    uart.println(inputs_info.str_pulses_values.buf);
+  }
+
+  inputs_info.pwm_percents.pulse = 0;
+  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
+    byte smooth_pulse = find_median<BUFFER_SIZE_FOR_SMOOTH, byte>(inputs_info.pulses_info[input_index].smooths_buffer, true);
+    byte pulse = constrain(smooth_pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
+    byte pulse_2percent = map(
+        pulse,
+        settings.min_pulses[input_index], settings.max_pulses[input_index],
+        0, 100);
+    inputs_info.pwm_percents.pulse = max(inputs_info.pwm_percents.pulse, pulse_2percent);
+
+    if (is_debug) {
+      uart.print(F("input "));
+      uart.print(INPUTS_PINS[input_index]);
+      uart.print(F(": pulse "));
+      uart.print(pulse);
+      uart.print(F(" ("));
+      uart.print(pulse_2percent);
+      uart.print(F("%); avg smooth "));
+      uart.print(smooth_pulse);
+      uart.print(F(" ["));
+      for (byte i = 0; i < BUFFER_SIZE_FOR_SMOOTH; ++i) {
+        if (i != 0) {
+          uart.print(F(", "));
+        }
+        if (i == inputs_info.smooth_index) {
+          uart.print(F("{"));
+        }
+        uart.print(inputs_info.pulses_info[input_index].smooths_buffer[i]);
+        if (i == inputs_info.smooth_index) {
+          uart.print(F("}"));
+        }
+      }
+      uart.println(F("]"));
+    }
+  }
+  if (++inputs_info.smooth_index >= BUFFER_SIZE_FOR_SMOOTH) {
+    inputs_info.smooth_index = 0;
+  }
 }

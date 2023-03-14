@@ -6,19 +6,12 @@ void print_bits(byte bits, byte size);
 
 // связанное с управлением PWM
 
-void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false);
 void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx);
 mString<4 * OUTPUTS_COUNT> get_duties_settings();
 mString<3 * INPUTS_COUNT> get_pulses_settings(bool show_min);
 
 #define get_out_pin(index) OUTPUTS_PINS[index][0]
 #define get_rpm_pin(index) OUTPUTS_PINS[index][1]
-#define get_cached_duty(index, percent) percent_2duty_cache[index][percent]
-#define update_cached_duty(index, percent, duty) percent_2duty_cache[index][percent] = duty
-#define apply_pwm_4all(percent)                            \
-  for (byte __i__ = 0; __i__ < OUTPUTS_COUNT; ++__i__) {   \
-    apply_fan_pwm(__i__, get_cached_duty(__i__, percent)); \
-  }
 #define convert_percent_2pulse(percent) map(percent, 0, 100, 0, PULSE_WIDTH)
 
 // связанное с LED матрицей
@@ -80,72 +73,6 @@ mString<4 * OUTPUTS_COUNT> get_duties_settings() {
   }
 
   return values;
-}
-
-void read_pulses(InputsInfo& inputs_info, bool do_cmd_print = false) {
-  inputs_info.str_pulses_values.clear();
-  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
-    byte buffer_on_read[BUFFER_SIZE_ON_READ];
-    for (byte i = 0; i < BUFFER_SIZE_ON_READ; ++i) {
-      buffer_on_read[i] = pulseIn(INPUTS_PINS[input_index], HIGH, (PULSE_WIDTH << 1));
-      if ((buffer_on_read[i] == 0) && (digital_read_fast(INPUTS_PINS[input_index]) == HIGH)) {
-        buffer_on_read[i] = PULSE_WIDTH;
-      } else {
-        buffer_on_read[i] = constrain(buffer_on_read[i], 0, PULSE_WIDTH);
-      }
-    }
-    inputs_info.pulses_info[input_index].value = find_median<BUFFER_SIZE_ON_READ, byte>(buffer_on_read, PULSE_AVG_POWER, true);
-
-    if (input_index != 0) {
-      inputs_info.str_pulses_values.add(" ");
-    }
-    if (inputs_info.pulses_info[input_index].value < 10) {
-      inputs_info.str_pulses_values.add(0);
-    }
-    inputs_info.str_pulses_values.add(inputs_info.pulses_info[input_index].value);
-  }
-  if (do_cmd_print) {
-    uart.println(inputs_info.str_pulses_values.buf);
-  }
-
-  inputs_info.pwm_percent_by_pulse = 0;
-  for (byte input_index = 0; input_index < INPUTS_COUNT; ++input_index) {
-    byte smooth_pulse = find_median<BUFFER_SIZE_FOR_SMOOTH, byte>(inputs_info.pulses_info[input_index].smooths_buffer, true);
-    byte pulse = constrain(smooth_pulse, settings.min_pulses[input_index], settings.max_pulses[input_index]);
-    byte pulse_2percent = map(
-        pulse,
-        settings.min_pulses[input_index], settings.max_pulses[input_index],
-        0, 100);
-    inputs_info.pwm_percent_by_pulse = max(inputs_info.pwm_percent_by_pulse, pulse_2percent);
-
-    if (do_cmd_print) {
-      uart.print(F("input "));
-      uart.print(INPUTS_PINS[input_index]);
-      uart.print(F(": pulse "));
-      uart.print(pulse);
-      uart.print(F(" ("));
-      uart.print(pulse_2percent);
-      uart.print(F("%); avg smooth "));
-      uart.print(smooth_pulse);
-      uart.print(F(" ["));
-      for (byte i = 0; i < BUFFER_SIZE_FOR_SMOOTH; ++i) {
-        if (i != 0) {
-          uart.print(F(", "));
-        }
-        if (i == inputs_info.smooth_index) {
-          uart.print(F("{"));
-        }
-        uart.print(inputs_info.pulses_info[input_index].smooths_buffer[i]);
-        if (i == inputs_info.smooth_index) {
-          uart.print(F("}"));
-        }
-      }
-      uart.println(F("]"));
-    }
-  }
-  if (++inputs_info.smooth_index >= BUFFER_SIZE_FOR_SMOOTH) {
-    inputs_info.smooth_index = 0;
-  }
 }
 
 void read_and_exec_command(Settings settings, InputsInfo inputs_info, mString<64>& cmd_data, bool& is_debug, Max7219Matrix& mtrx) {
@@ -1113,23 +1040,23 @@ void menu_refresh(Settings settings, InputsInfo& inputs_info, uint32_t time, Max
             case DUTIES_MENU_1: {
               switch (menu.cursor[menu.level]) {
                 case SHOW_PARAM_VALUE: {
-                  if (cooling_on) {
+                  if (inputs_info.cooling_on) {
                     caption = "100%";
                   } else {
-                    if (inputs_info.pwm_percent_by_pulse < 10) {
+                    if (inputs_info.pwm_percents.pulse < 10) {
                       caption.add(0);
                     }
-                    caption.add(inputs_info.pwm_percent_by_pulse);
+                    caption.add(inputs_info.pwm_percents.pulse);
                     caption.add(" ");
-                    if (inputs_info.pwm_percent_by_temp < 10) {
+                    if (inputs_info.pwm_percents.temperature < 10) {
                       caption.add(0);
                     }
-                    caption.add(inputs_info.pwm_percent_by_temp);
+                    caption.add(inputs_info.pwm_percents.temperature);
                     caption.add(" ");
-                    if (inputs_info.pwm_percent_by_optic < 10) {
+                    if (inputs_info.pwm_percents.optical < 10) {
                       caption.add(0);
                     }
-                    caption.add(inputs_info.pwm_percent_by_optic);
+                    caption.add(inputs_info.pwm_percents.optical);
                   }
 
                   menu.everytime_refresh = true;

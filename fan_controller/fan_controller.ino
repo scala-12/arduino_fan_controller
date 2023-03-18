@@ -119,6 +119,7 @@ void setup() {
       settings.max_pulses[i] = convert_percent_2pulse(DEFAULT_MAX_PERCENT);
     }
     EEPROM.put(0, settings);
+    EEPROM.write(INIT_ADDR, VERSION_NUMBER);
 
     init_output_params(true, false);
   } else {

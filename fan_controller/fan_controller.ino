@@ -10,6 +10,12 @@
 #define MTRX_BRIGHT 0       /* яркость матрицы [0..15] */
 
 // #define DONT_USE_UART /* не использовать UART */
+#ifdef OCR3A
+// #define USE_TIMER_3A /* использование выхода TX для ШИМ, RX - чтение RPM */
+#ifdef USE_TIMER_3A
+#define DONT_USE_UART
+#endif
+#endif
 // ^^^ настраиваемые параметры ^^^
 
 #ifndef DONT_USE_UART
@@ -28,7 +34,7 @@ MicroUART uart;  // интерфейс работы с серийным порт
 #include <EEPROM.h>
 #include <EncButton2.h>
 #include <GyverMAX7219.h>
-#include <GyverPWM.h>
+#include <GyverPWM.h> /* используется форк https://github.com/scala-12/GyverPWM (если не одобрен pull https://github.com/GyverLibs/GyverPWM/pull/4) для работы Timer3 на LGT8F328P */
 #include <mString.h>
 #include <microDS18B20.h>
 
@@ -395,7 +401,11 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
 void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   if (is_first) {
     for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
+#ifdef OCR3A
+      init_timer_pin(get_out_pin(i));
+#else
       pinMode(get_out_pin(i), OUTPUT);
+#endif
       pinMode(get_rpm_pin(i), INPUT_PULLUP);
 
       PWM_frequency(get_out_pin(i), (1000000 / PULSE_WIDTH), FAST_PWM);  // (1s -> mcs) / (период шим)

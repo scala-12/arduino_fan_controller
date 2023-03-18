@@ -24,12 +24,27 @@
 #define MIN_TEMP_VALUE 10          /* минимальное значение для датчика температуры */
 #define SERIAL_SPEED 115200        /* скорость серийного порта */
 #define SENSE_REFRESH_MS 2000      /* таймаут чтения входящих сигналов */
-#define VERSION_NUMBER 8           /* версия структуры данных, хранящихся в памяти */
-#define INIT_ADDR 1023             /* ячейка памяти с информацией о структуре хранящихся данных */
-#define PULSE_AVG_POWER 1          /* радиус усреднения медианны для входящего сигнала */
-#define COOLING_PIN A6             /* пин включения максимальной скорости */
+#define VERSION_PREFIX 4           /* индекс версии структуры данных, хранящихся в памяти */
+#ifdef OCR3A
+#define TIMER3_BIT 1 /* LGT8F328P Timer3 доступен */
+#else
+#define TIMER3_BIT 0 /* Timer3 отсутствует на ATmega328P */
+#endif
+#define VERSION_NUMBER \
+  ((VERSION_PREFIX << 1) | TIMER3_BIT) /* версия структуры данных с учетом версии микроконтроллера */
+#define INIT_ADDR 1016                 /* ячейка памяти с информацией о структуре хранящихся данных */
+#define PULSE_AVG_POWER 1              /* радиус усреднения медианны для входящего сигнала */
 
-const byte OUTPUTS_PINS[][2] = {{3, 4}, {5, 6}, {9, 8}, {10, 11}};  // пины [выходящий PWM, RPM]
+const byte OUTPUTS_PINS[][2] = {{3, 4}, {5, 6}, {9, 8}, {10, 11}  // пины [выходящий PWM, RPM]
+#ifdef OCR3A
+                                ,
+                                {2, 7}
+#ifdef USE_TIMER_3A
+                                ,
+                                {1, 0}
+#endif
+#endif
+};
 
 const byte INPUTS_PINS[] = {A1, A2, A3};  // пины входящих PWM
 

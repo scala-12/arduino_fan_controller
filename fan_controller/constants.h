@@ -24,7 +24,7 @@
 #define MIN_TEMP_VALUE 10          /* минимальное значение для датчика температуры */
 #define SERIAL_SPEED 115200        /* скорость серийного порта */
 #define SENSE_REFRESH_MS 2000      /* таймаут чтения входящих сигналов */
-#define VERSION_PREFIX 4           /* индекс версии структуры данных, хранящихся в памяти */
+#define VERSION_PREFIX 5           /* индекс версии структуры данных, хранящихся в памяти */
 #ifdef OCR3A
 #define TIMER3_BIT 1 /* LGT8F328P Timer3 доступен */
 #else
@@ -82,6 +82,8 @@ enum ButtonKey : byte {
   DOWN
 };
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
+
+#define VISUALS_COUNT 4
 
 #ifndef DONT_USE_UART
 #define SHOW_PULSES_COMMAND "show_pulses"

@@ -40,12 +40,13 @@ enum DutiesMenu : byte {
 #define DUTIES_MENU_SIZE 2
 
 enum SetsMenu : byte {
+  FILL_VISUAL,
   HOLD_COOL,
   MIN_DUTY_PERCENT,
   RESET_OUT,
   COMMIT
 };
-#define SETS_MENU_SIZE 4
+#define SETS_MENU_SIZE 5
 
 #define MENU_LEVELS 5
 

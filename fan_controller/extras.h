@@ -650,8 +650,9 @@ void menu_tick(Settings& settings, byte buttons_state[CTRL_KEYS_COUNT], Menu& me
           }
           case MainMenu::SETS_MENU: {
             switch (menu.cursor[2]) {
+              case SetsMenu::FILL_VISUAL:  // break;
               case SetsMenu::HOLD_COOL: {
-                settings.cool_on_hold = menu.cursor[3] == 1;
+                ((menu.cursor[2] == SetsMenu::FILL_VISUAL) ? settings.do_fill_visual : settings.cool_on_hold) = menu.cursor[3] == 1;
                 go_back = true;
                 break;
               }
@@ -722,9 +723,10 @@ void menu_tick(Settings& settings, byte buttons_state[CTRL_KEYS_COUNT], Menu& me
           }
           case MainMenu::SETS_MENU: {
             switch (menu.cursor[menu.level]) {
+              case SetsMenu::FILL_VISUAL:  // break;
               case SetsMenu::HOLD_COOL: {
                 go_next = true;
-                next_index = (settings.cool_on_hold) ? 1 : 0;
+                next_index = (menu.cursor[menu.level] == SetsMenu::FILL_VISUAL && settings.do_fill_visual) || (menu.cursor[menu.level] == SetsMenu::HOLD_COOL && settings.cool_on_hold);
                 break;
               }
               case SetsMenu::MIN_DUTY_PERCENT: {
@@ -860,6 +862,7 @@ void menu_tick(Settings& settings, byte buttons_state[CTRL_KEYS_COUNT], Menu& me
           }
           case MainMenu::SETS_MENU: {
             switch (menu.cursor[2]) {
+              case SetsMenu::FILL_VISUAL:  // break;
               case SetsMenu::HOLD_COOL: {
                 if (bitRead(UP_STATES, ButtonStateBit::CLICK) && menu.cursor[menu.level] == 1) {
                   bitSet(direction, 0);
@@ -1077,6 +1080,10 @@ void menu_refresh(Settings& settings, InputsInfo& inputs_info, uint32_t time, Ma
             }
             case MainMenu::SETS_MENU: {
               switch (menu.cursor[menu.level]) {
+                case SetsMenu::FILL_VISUAL: {
+                  caption = "filling";
+                  break;
+                }
                 case SetsMenu::HOLD_COOL: {
                   caption = "hold cool";
                   break;
@@ -1161,6 +1168,7 @@ void menu_refresh(Settings& settings, InputsInfo& inputs_info, uint32_t time, Ma
             }
             case MainMenu::SETS_MENU: {
               switch (menu.cursor[2]) {
+                case SetsMenu::FILL_VISUAL:  // break;
                 case SetsMenu::HOLD_COOL: {
                   if (menu.cursor[menu.level] == 0) {
                     caption.add("false");

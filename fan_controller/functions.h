@@ -142,4 +142,8 @@ bool is_success_delay(uint32_t& last_time, uint32_t timeout) {
   return before_over + timeout <= current;
 }
 
+byte calculate_avg(byte a, byte b) {
+  return ((a ^ b) >> 1) + (a & b);
+}
+
 #endif

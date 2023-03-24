@@ -34,7 +34,8 @@ MicroUART uart;  // интерфейс работы с серийным порт
 #include <EEPROM.h>
 #include <EncButton2.h>
 #include <GyverMAX7219.h>
-#include <GyverPWM.h> /* используется форк https://github.com/scala-12/GyverPWM (если не одобрен pull https://github.com/GyverLibs/GyverPWM/pull/4) для работы Timer3 на LGT8F328P */
+#include <GyverPWM.h>           /* используется форк https://github.com/scala-12/GyverPWM (если не одобрен pull https://github.com/GyverLibs/GyverPWM/pull/4) для работы Timer3 на LGT8F328P */
+#include <SpectrumCalculator.h> /* https://github.com/scala-12/SpectrumCalculator */
 #include <mString.h>
 #include <microDS18B20.h>
 
@@ -108,6 +109,9 @@ struct Reciever {
 };
 Reciever reciever;
 
+SpectrumCalculator spectrum_calculator(VISUALS_COUNT, MTRX_PIXELS_IN_ROW, MTRX_PIXELS_IN_COLUMN);
+const byte DRAW_OFFSET = (MTRX_PIXELS_IN_ROW - spectrum_calculator.get_used_columns()) >> 1;
+
 struct Settings {
   byte min_duties[OUTPUTS_COUNT];  // минимальный PWM для начала вращения
   byte min_pulses[INPUTS_COUNT];   // нижняя граница чувствительности к входящему PWM
@@ -117,6 +121,7 @@ struct Settings {
   uint16_t max_optic_rpm;          // верхняя граница чувсвительности оптического датчика
   uint16_t min_optic_rpm;          // нижняя граница чувсвительности оптического датчика
   bool cool_on_hold;               // состояние кнопки для активации режима продувки
+  bool do_fill_visual;             // заливка графика
   byte min_duty_percent;           // процент от минимальной скорости вращения. если меньше 100, то вентилятор может и остановиться
 };
 Settings settings;  // хранимые параметры
@@ -227,6 +232,8 @@ void setup() {
     init_output_params(true, false, mtrx);
   }
   close_menu(mtrx, menu);
+
+  spectrum_calculator.set_round_range(2);
 }
 
 void loop() {
@@ -293,6 +300,26 @@ void loop() {
 
   menu_refresh(settings, inputs_info, time, mtrx, menu);
   mtrx_refresh(mtrx, true);
+  if (!menu.is_printed) {
+    spectrum_calculator.tick();
+    if (!is_success_delay(menu.time, MENU_TIMEOUT) || spectrum_calculator.is_changed()) {
+      byte values_a[spectrum_calculator.get_used_columns()];
+      byte values_b[spectrum_calculator.get_used_columns()];
+      spectrum_calculator.pull_max_positions(values_a, values_b);
+      mtrx.panel.clear();
+      if (settings.do_fill_visual) {
+        for (byte i = 0; i < spectrum_calculator.get_used_columns(); ++i) {
+          mtrx.panel.fastLineV(i + DRAW_OFFSET, MTRX_PIXELS_IN_COLUMN, MTRX_PIXELS_IN_COLUMN - max(values_a[i], values_b[i]));
+        }
+      } else {
+        for (byte i = 0; i < spectrum_calculator.get_used_columns(); ++i) {
+          mtrx.panel.fastLineV(i + DRAW_OFFSET, MTRX_PIXELS_IN_COLUMN - values_a[i], MTRX_PIXELS_IN_COLUMN - values_b[i]);
+        }
+      }
+
+      mtrx.panel.update();
+    }
+  }
 
   bool do_inputs_refresh = is_success_delay(inputs_info.time, SENSE_REFRESH_MS);
   if (do_inputs_refresh) {
@@ -305,6 +332,14 @@ void loop() {
 
     read_pulses();
     read_temp();
+
+    byte visual_data[VISUALS_COUNT];
+    visual_data[0] = inputs_info.pwm_percents.optical;
+    visual_data[1] = calculate_avg(calculate_avg(inputs_info.pwm_percents.optical, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.pulse);
+    visual_data[2] = inputs_info.pwm_percents.temperature;
+    visual_data[3] = inputs_info.pwm_percents.pulse;
+
+    spectrum_calculator.put_signals(visual_data);
 
     byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
     bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());

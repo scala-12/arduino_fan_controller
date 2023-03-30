@@ -8,13 +8,22 @@
 #define MTRX_PANELS_COUNT 4 /* количество модулей матрицы в ряд */
 #define MTRX_ROWS_COUNT 1   /* количество рядов модулей матрицы */
 #define MTRX_BRIGHT 0       /* яркость матрицы [0..15] */
+
+// #define DONT_USE_UART /* не использовать UART */
 // ^^^ настраиваемые параметры ^^^
 
-// настройка UART
+#ifndef DONT_USE_UART
 #define MU_RX_BUF 64 /* размер буфера */
 #define MU_PRINT
 #include <MicroUART.h>
-// ^^^ настройка UART ^^^
+MicroUART uart;  // интерфейс работы с серийным портом
+#define uart_print(value) uart.print(value)
+#define uart_println(value) uart.println(value)
+#else
+#define uart_print(value)
+#define uart_println(value)
+#endif
+
 #include <AnalogKey.h>
 #include <EEPROM.h>
 #include <EncButton2.h>
@@ -86,7 +95,6 @@ InputsInfo inputs_info;
 byte percent_2duty_cache[OUTPUTS_COUNT][101];  // кеш преобразования процента скорости в PWM
 #define convert_percent_2duty(index, percent) percent_2duty_cache[index][percent]
 
-MicroUART uart;    // интерфейс работы с серийным портом
 boolean is_debug;  // флаг вывода технической информации
 struct Reciever {
   mString<64> data;  // буфер чтения команды из серийного порта
@@ -145,8 +153,10 @@ void MU_serialEvent() {
 }
 
 void setup() {
+#ifndef DONT_USE_UART
   uart.begin(SERIAL_SPEED);
-  uart.println(F("start"));
+  uart_println(F("start"));
+#endif
 
   for (byte i = 0; i < INPUTS_COUNT; ++i) {
     pinMode(INPUTS_PINS[i], INPUT);
@@ -187,7 +197,7 @@ void setup() {
 
   if (EEPROM.read(INIT_ADDR) != VERSION_NUMBER) {
     // если структура хранимых данных изменена, то делаем дефолт
-    uart.println(F("new data version"));
+    uart_println(F("new data version"));
     settings.min_duty_percent = 100;
     settings.cool_on_hold = true;
     settings.max_optic_rpm = DEFAULT_MAX_OPTIC_RPM;
@@ -206,7 +216,7 @@ void setup() {
 
     init_output_params(true, false, mtrx);
   } else {
-    uart.println(F("load data from EEPROM"));
+    uart_println(F("load data from EEPROM"));
     EEPROM.get(0, settings);
     init_output_params(true, false, mtrx);
   }
@@ -230,8 +240,8 @@ void loop() {
         bitSet(ctrl_keyboard.states[i], ButtonStateBit::CLICK);
         ctrl_keyboard.buttons[i].resetState();
         if (is_debug) {
-          uart.print("click ");
-          uart.println(i);
+          uart_print("click ");
+          uart_println(i);
         }
         break;
       }
@@ -239,14 +249,14 @@ void loop() {
         if (ctrl_keyboard.buttons[i].held(1)) {
           bitSet(ctrl_keyboard.states[i], ButtonStateBit::HELD_1);
           if (is_debug) {
-            uart.print("held ");
-            uart.println(i);
+            uart_print("held ");
+            uart_println(i);
           }
         } else if (ctrl_keyboard.buttons[i].hold(0)) {
           bitSet(ctrl_keyboard.states[i], ButtonStateBit::HOLD_0);
           if (is_debug) {
-            uart.print("hold ");
-            uart.println(i);
+            uart_print("hold ");
+            uart_println(i);
           }
         }
         break;
@@ -296,11 +306,11 @@ void loop() {
       if (!inputs_info.cooling_on) {
         inputs_info.cooling_on = true;
         apply_pwm_4all(100);
-        uart.println(F("cooling ON"));
+        uart_println(F("cooling ON"));
       }
     } else if (inputs_info.cooling_on) {
       inputs_info.cooling_on = false;
-      uart.println(F("cooling OFF"));
+      uart_println(F("cooling OFF"));
     } else {
       apply_pwm_4all(max(max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.optical));
     }
@@ -308,8 +318,8 @@ void loop() {
 }
 
 boolean has_rpm(byte index, byte more_than_rpm = 0) {
-  uart.print(F("fan "));
-  uart.print(get_out_pin(index));
+  uart_print(F("fan "));
+  uart_print(get_out_pin(index));
 
   unsigned long rpm = pulseIn(get_rpm_pin(index), HIGH, 500000);
   if (rpm == 0) {
@@ -319,8 +329,8 @@ boolean has_rpm(byte index, byte more_than_rpm = 0) {
     }
   }
 
-  uart.print(" ");
-  uart.println(rpm);
+  uart_print(" ");
+  uart_println(rpm);
 
   return rpm > more_than_rpm;
 }
@@ -344,15 +354,15 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
   byte _i = 0;
   byte max_count_index = 20;
   for (; ((running_bits | ignored_bits) != complete_bits) && (_i < max_count_index || wait_stop); ++_i) {
-    uart.print(F("stop fans, "));
-    uart.print(_i);
-    uart.print(": ");
+    uart_print(F("stop fans, "));
+    uart_print(_i);
+    uart_print(": ");
     print_bits(running_bits, OUTPUTS_COUNT);
-    uart.print(", ");
+    uart_print(", ");
     print_bits(ignored_bits, OUTPUTS_COUNT);
-    uart.print(", ");
+    uart_print(", ");
     print_bits(complete_bits, OUTPUTS_COUNT);
-    uart.println();
+    uart_println();
     if (!wait_stop) {
       fixed_delay(500);
     }
@@ -366,18 +376,18 @@ byte stop_fans(byte ignored_bits, bool wait_stop) {
   }
 
   if (wait_stop || _i < max_count_index) {
-    uart.print(F("stopped "));
+    uart_print(F("stopped "));
   } else {
-    uart.print(F("not stopped "));
+    uart_print(F("not stopped "));
   }
 
   print_bits(running_bits, OUTPUTS_COUNT);
-  uart.print(", ");
+  uart_print(", ");
   print_bits(ignored_bits, OUTPUTS_COUNT);
-  uart.print(", ");
+  uart_print(", ");
   print_bits(complete_bits, OUTPUTS_COUNT);
-  uart.println();
-  uart.println();
+  uart_println();
+  uart_println();
 
   return running_bits;
 }
@@ -414,9 +424,9 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
         // если не запустился, то игнорируем его детальную настройку из-за отсутствия обратной связи
         bitSet(ignored_bits, i);
         settings.min_duties[i] = MIN_DUTY;
-        uart.print("fan ");
-        uart.print(get_out_pin(i));
-        uart.println(F(" without RPM"));
+        uart_print("fan ");
+        uart_print(get_out_pin(i));
+        uart_println(F(" without RPM"));
         cursor = typewriter_slide_set_text(mtrx, "-", cursor);
       } else {
         cursor = typewriter_slide_set_text(mtrx, "1", cursor);
@@ -440,13 +450,13 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
         mString<8> str;
         for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
           if (!bitRead(ignored_bits, i)) {
-            uart.print("fan ");
-            uart.print(get_out_pin(i));
-            uart.print(F(" binary search min duty ["));
-            uart.print(start_duties[i]);
-            uart.print(", ");
-            uart.print(settings.min_duties[i]);
-            uart.println("]");
+            uart_print("fan ");
+            uart_print(get_out_pin(i));
+            uart_print(F(" binary search min duty ["));
+            uart_print(start_duties[i]);
+            uart_print(", ");
+            uart_print(settings.min_duties[i]);
+            uart_println("]");
 
             str.clear();
             str.add(" ");
@@ -468,12 +478,12 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
       byte ready_bits = ignored_bits;
       mString<8> str;
       for (byte _i = 0; _i < MAX_DUTY && (ready_bits != complete_bits); ++_i) {
-        uart.print(_i);
-        uart.print(F(", search step-by-step min duty "));
+        uart_print(_i);
+        uart_print(F(", search step-by-step min duty "));
         print_bits(ready_bits, OUTPUTS_COUNT);
-        uart.print(" != ");
+        uart_print(" != ");
         print_bits(complete_bits, OUTPUTS_COUNT);
-        uart.println();
+        uart_println();
 
         for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
           if (!bitRead(ready_bits, i)) {
@@ -519,10 +529,10 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
               str.add("!");
               cursor = typewriter_slide_set_text(mtrx, str.buf, cursor);
 
-              uart.print("fan ");
-              uart.print(get_out_pin(i));
-              uart.print(F(" min duty "));
-              uart.println(settings.min_duties[i]);
+              uart_print("fan ");
+              uart_print(get_out_pin(i));
+              uart_print(F(" min duty "));
+              uart_println(settings.min_duties[i]);
             }
           }
         }
@@ -549,30 +559,30 @@ void init_output_params(bool is_first, bool init_rpm, Max7219Matrix& mtrx) {
   }
 
   for (byte i = 0; i < OUTPUTS_COUNT; ++i) {
-    uart.print(F("values for "));
-    uart.print(get_out_pin(i));
-    uart.println(":");
+    uart_print(F("values for "));
+    uart_print(get_out_pin(i));
+    uart_println(":");
     for (byte p = 0, j = 0; p <= 100; ++p, ++j) {
       if (j == 10) {
         j = 0;
-        uart.println();
+        uart_println();
       }
-      uart.print(p);
-      uart.print("% ");
-      uart.print(convert_percent_2duty(i, p));
-      uart.print("\t");
+      uart_print(p);
+      uart_print("% ");
+      uart_print(convert_percent_2duty(i, p));
+      uart_print("\t");
     }
-    uart.println();
+    uart_println();
   }
 }
 
 void apply_fan_pwm(byte index, byte duty) {
   PWM_set(get_out_pin(index), duty);
   if (is_debug) {
-    uart.print(F("Fan "));
-    uart.print(get_out_pin(index));
-    uart.print(F(", duty "));
-    uart.println(duty);
+    uart_print(F("Fan "));
+    uart_print(get_out_pin(index));
+    uart_print(F(", duty "));
+    uart_println(duty);
   }
 }
 
@@ -582,13 +592,13 @@ void read_temp() {
     inputs_info.temperature.value = inputs_info.temperature.sensor.getTemp();
     inputs_info.pwm_percents.temperature = convert_by_sqrt(inputs_info.temperature.value, settings.min_temp, settings.max_temp, 0, 100);
     if (is_debug) {
-      uart.println(inputs_info.temperature.value);
+      uart_println(inputs_info.temperature.value);
     }
   } else {
     inputs_info.temperature.value = settings.min_temp;
     inputs_info.pwm_percents.temperature = 0;
     if (is_debug) {
-      uart.println("error");
+      uart_println("error");
     }
   }
   inputs_info.temperature.sensor.requestTemp();
@@ -623,7 +633,7 @@ void read_pulses() {
     inputs_info.str_pulses_values.add(inputs_info.pulses_info[input_index].value);
   }
   if (is_debug) {
-    uart.println(inputs_info.str_pulses_values.buf);
+    uart_println(inputs_info.str_pulses_values.buf);
   }
 
   inputs_info.pwm_percents.pulse = 0;
@@ -637,28 +647,28 @@ void read_pulses() {
     inputs_info.pwm_percents.pulse = max(inputs_info.pwm_percents.pulse, pulse_2percent);
 
     if (is_debug) {
-      uart.print(F("input "));
-      uart.print(INPUTS_PINS[input_index]);
-      uart.print(F(": pulse "));
-      uart.print(pulse);
-      uart.print(F(" ("));
-      uart.print(pulse_2percent);
-      uart.print(F("%); avg smooth "));
-      uart.print(smooth_pulse);
-      uart.print(F(" ["));
+      uart_print(F("input "));
+      uart_print(INPUTS_PINS[input_index]);
+      uart_print(F(": pulse "));
+      uart_print(pulse);
+      uart_print(F(" ("));
+      uart_print(pulse_2percent);
+      uart_print(F("%); avg smooth "));
+      uart_print(smooth_pulse);
+      uart_print(F(" ["));
       for (byte i = 0; i < BUFFER_SIZE_FOR_SMOOTH; ++i) {
         if (i != 0) {
-          uart.print(F(", "));
+          uart_print(F(", "));
         }
         if (i == inputs_info.smooth_index) {
-          uart.print(F("{"));
+          uart_print(F("{"));
         }
-        uart.print(inputs_info.pulses_info[input_index].smooths_buffer[i]);
+        uart_print(inputs_info.pulses_info[input_index].smooths_buffer[i]);
         if (i == inputs_info.smooth_index) {
-          uart.print(F("}"));
+          uart_print(F("}"));
         }
       }
-      uart.println(F("]"));
+      uart_println(F("]"));
     }
   }
   if (++inputs_info.smooth_index >= BUFFER_SIZE_FOR_SMOOTH) {

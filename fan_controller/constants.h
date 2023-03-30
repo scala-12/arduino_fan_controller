@@ -68,6 +68,7 @@ enum ButtonKey : byte {
 };
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
 
+#ifndef DONT_USE_UART
 #define SHOW_PULSES_COMMAND "show_pulses"
 #define SHOW_TEMP_COMMAND "show_temp"
 #define SHOW_OPTICAL_COUNTER_COMMAND "show_optic"
@@ -91,6 +92,7 @@ int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни кла
 #define GET_MIN_DUTIES_COMMAND "get_min_duties"
 #define SWITCH_DEBUG_COMMAND "switch_debug"
 #define SWITCH_COOLING_HOLD_COMMAND "switch_cooling_hold"
+#endif
 // ^^^ системные переменные, нельзя менять ^^^
 
 #endif

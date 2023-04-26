@@ -34,7 +34,7 @@ MicroUART uart;  // интерфейс работы с серийным порт
 #include <EEPROM.h>
 #include <EncButton2.h>
 #include <GyverMAX7219.h>
-#include <GyverPWM.h>           /* используется форк https://github.com/scala-12/GyverPWM (если не одобрен pull https://github.com/GyverLibs/GyverPWM/pull/4) для работы Timer3 на LGT8F328P */
+#include <GyverPWM.h>           /* используется с коммитами из pull-requests #4 и #5 (https://github.com/GyverLibs/GyverPWM/pulls) */
 #include <SpectrumCalculator.h> /* https://github.com/scala-12/SpectrumCalculator */
 #include <mString.h>
 #include <microDS18B20.h>

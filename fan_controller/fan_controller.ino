@@ -53,9 +53,10 @@ const byte OUTPUTS_COUNT = get_arr_len(OUTPUTS_PINS);  // количество �
 // переменные
 
 struct {
-  AnalogKey<COOLING_PIN, 1> keys;            // клавиши включения режима проветривания
-  EncButton2<VIRT_BTN, EB_TICK> buttons[1];  // кнопки включения режима проветривания
-} cooling_keyboard;
+  AnalogKey<COOL_MODES_PIN, COOL_MODES_COUNT, cool_modes_map> keys;  // клавиши выбора режима проветривания
+  EncButton2<VIRT_BTN, EB_TICK> buttons[COOL_MODES_COUNT];           // кнопки выбора режима проветривания
+  CoolMode mode;
+} cool_modes_keyboard;
 
 struct {
   AnalogKey<ANALOG_KEYS_PIN, CTRL_KEYS_COUNT, buttons_map> keys;  // клавиши управления
@@ -176,8 +177,8 @@ void setup() {
 
   inputs_info.temperature.sensor.requestTemp();
 
-  cooling_keyboard.keys.attach(0, 1023);
-  cooling_keyboard.keys.setWindow(200);
+  cool_modes_keyboard.mode = CoolMode::STANDART;
+  cool_modes_keyboard.keys.setWindow(1024 / ((COOL_MODES_COUNT << 1) - 1));
   ctrl_keyboard.keys.setWindow(1024 / ((CTRL_KEYS_COUNT << 1) - 1));
   for (byte i = 0; i < CTRL_KEYS_COUNT; ++i) {
     ctrl_keyboard.states[i] = 0;
@@ -341,9 +342,23 @@ void loop() {
 
     spectrum_calculator.put_signals(visual_data);
 
-    byte cool_button_state = cooling_keyboard.buttons[0].tick(cooling_keyboard.keys.status(0));
-    bool is_hold_button = cool_button_state == 6 || (cool_button_state == 7 && cooling_keyboard.buttons[0].busy());
-    if (settings.cool_on_hold == is_hold_button) {
+    cool_modes_keyboard.mode = CoolMode::STANDART;
+    for (byte i = 0; i < COOL_MODES_COUNT && cool_modes_keyboard.mode == CoolMode::STANDART; ++i) {
+      switch (cool_modes_keyboard.buttons[i].tick(cool_modes_keyboard.keys.status(i))) {
+        case 7: {
+          if (!cool_modes_keyboard.buttons[i].busy()) {
+            break;
+          }
+          // break; not used
+        }
+        case 6: {
+          cool_modes_keyboard.mode = CoolMode(i);
+          break;
+        }
+      }
+    }
+
+    if ((settings.cool_on_hold && cool_modes_keyboard.mode == CoolMode::MAX) || (!settings.cool_on_hold && cool_modes_keyboard.mode == CoolMode::STANDART)) {
       if (!inputs_info.cooling_on) {
         inputs_info.cooling_on = true;
         apply_pwm_4all(100);
@@ -353,7 +368,11 @@ void loop() {
       inputs_info.cooling_on = false;
       uart_println(F("cooling OFF"));
     } else {
-      apply_pwm_4all(max(max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature), inputs_info.pwm_percents.optical));
+      byte pwm_percent_value = max(inputs_info.pwm_percents.pulse, inputs_info.pwm_percents.temperature);
+      if (cool_modes_keyboard.mode != CoolMode::WITHOUT_OPTIC) {
+        pwm_percent_value = max(pwm_percent_value, inputs_info.pwm_percents.optical);
+      }
+      apply_pwm_4all(pwm_percent_value);
     }
   }
 }

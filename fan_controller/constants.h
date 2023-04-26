@@ -51,7 +51,7 @@ const byte INPUTS_PINS[] = {A1, A2, A3};  // пины входящих PWM
 #define TEMP_SENSOR_PIN A4    /* пин датчика температуры */
 #define OPTICAL_SENSOR_PIN A5 /* пин оптического энкодера */
 
-#define COOLING_PIN A6     /* пин включения максимальной скорости */
+#define COOL_MODES_PIN A6  /* пин выбора режима проветривания */
 #define ANALOG_KEYS_PIN A7 /* пин подключения клавиш */
 
 #define MTRX_CS_PIN 12    /* CS-пин матрицы */
@@ -82,6 +82,14 @@ enum ButtonKey : byte {
   DOWN
 };
 int16_t buttons_map[CTRL_KEYS_COUNT] = {317, 1016, 636};  // уровни клавиш UP, SELECT, DOWN
+
+#define COOL_MODES_COUNT 2 /* количество дополнительных режимов проветривания */
+enum CoolMode : byte {
+  MAX,
+  WITHOUT_OPTIC,
+  STANDART
+};
+int16_t cool_modes_map[COOL_MODES_COUNT] = {486, 1016};  // уровни режимов проветривания
 
 #define VISUALS_COUNT 4
 
